@@ -15,9 +15,12 @@ from .views import (
     ExportExcelView,
     LandAttachmentViewSet,
     LandCategoryViewSet,
+    MahallaViewSet,
+    ImportLayerView,
     MapConfigView,
     PublicLandViewSet,
     StatisticsView,
+    SystemNoticeViewSet,
 )
 
 router = DefaultRouter()
@@ -29,6 +32,8 @@ router.register('monitoring-years', MonitoringYearViewSet, basename='monitoring-
 router.register('object-versions', ObjectVersionViewSet, basename='object-version')
 router.register('monitoring-records', MonitoringRecordViewSet, basename='monitoring-record')
 router.register('urbanization-layers', UrbanizationLayerViewSet, basename='urbanization-layer')
+router.register('mahallas', MahallaViewSet, basename='mahalla')
+router.register('notices', SystemNoticeViewSet, basename='notice')
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -38,4 +43,5 @@ urlpatterns = [
     path('urbanization/', UrbanizationView.as_view(), name='urbanization'),
     path('export/excel/', ExportExcelView.as_view(), name='export-excel'),
     path('map-config/', MapConfigView.as_view(), name='map-config'),
+    path('import/', ImportLayerView.as_view(), name='import-layer'),
 ]

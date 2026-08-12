@@ -4,6 +4,7 @@ from .models import (
     CityBoundary,
     LandAttachment,
     LandCategory,
+    Mahalla,
     MonitoringRecord,
     MonitoringYear,
     ObjectVersion,
@@ -137,4 +138,12 @@ class UrbanizationLayerSerializer(serializers.ModelSerializer):
 class SystemNoticeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SystemNotice
-        fields = ('id', 'title', 'message', 'is_active', 'updated_at')
+        fields = ('id', 'title', 'message', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('created_at', 'updated_at')
+
+
+class MahallaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Mahalla
+        fields = ('id', 'name', 'code', 'geometry', 'is_active')
+

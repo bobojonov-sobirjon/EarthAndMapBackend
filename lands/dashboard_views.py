@@ -340,18 +340,37 @@ class UrbanizationView(APIView):
         })
 
 
-class MonitoringYearViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = MonitoringYear.objects.filter(is_active=True)
+class MonitoringYearViewSet(viewsets.ModelViewSet):
+    queryset = MonitoringYear.objects.all()
     serializer_class = MonitoringYearSerializer
-    permission_classes = [AllowAny]
-    filterset_fields = ['year_type', 'is_current']
+    search_fields = ['note']
+    filterset_fields = ['year_type', 'is_current', 'is_active']
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [AllowAny()]
+        return [IsNotObserver()]
+
+    def get_queryset(self):
+        qs = MonitoringYear.objects.all().order_by('-year')
+        if self.action in ('list', 'retrieve') and not (
+            self.request.user and self.request.user.is_authenticated
+            and (getattr(self.request.user, 'is_superuser', False) or getattr(self.request.user, 'role', None) == 'admin')
+        ):
+            qs = qs.filter(is_active=True)
+        return qs
 
 
-class ObjectVersionViewSet(viewsets.ReadOnlyModelViewSet):
+class ObjectVersionViewSet(viewsets.ModelViewSet):
     queryset = ObjectVersion.objects.select_related('land', 'land__category')
     serializer_class = ObjectVersionSerializer
-    permission_classes = [AllowAny]
-    filterset_fields = ['land', 'year']
+    search_fields = ['land__public_id', 'land__name', 'change_note']
+    filterset_fields = ['land', 'year', 'status']
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [AllowAny()]
+        return [IsNotObserver()]
 
 
 class MonitoringRecordViewSet(viewsets.ModelViewSet):
@@ -365,15 +384,28 @@ class MonitoringRecordViewSet(viewsets.ModelViewSet):
         serializer.save(recorded_by=self.request.user)
 
 
-class UrbanizationLayerViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = UrbanizationLayer.objects.filter(is_visible=True)
+class UrbanizationLayerViewSet(viewsets.ModelViewSet):
+    queryset = UrbanizationLayer.objects.all()
     serializer_class = UrbanizationLayerSerializer
-    permission_classes = [AllowAny]
-    filterset_fields = ['year', 'layer_kind']
+    search_fields = ['name', 'note']
+    filterset_fields = ['year', 'layer_kind', 'is_visible']
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [AllowAny()]
+        return [IsNotObserver()]
+
+    def get_queryset(self):
+        qs = UrbanizationLayer.objects.all().order_by('-year', 'name')
+        if self.action in ('list', 'retrieve') and not (
+            self.request.user and self.request.user.is_authenticated
+            and (getattr(self.request.user, 'is_superuser', False) or getattr(self.request.user, 'role', None) == 'admin')
+        ):
+            qs = qs.filter(is_visible=True)
+        return qs
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
-        # GeoJSON option
         if request.query_params.get('format') == 'geojson':
             features = []
             for layer in self.filter_queryset(self.get_queryset()):
@@ -389,6 +421,7 @@ class UrbanizationLayerViewSet(viewsets.ReadOnlyModelViewSet):
                         'year': layer.year,
                         'layer_kind': layer.layer_kind,
                         'area_ha': layer.area_ha,
+                        'growth_pct': layer.growth_pct,
                         'color': layer.color,
                     },
                 })

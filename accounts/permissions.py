@@ -10,3 +10,13 @@ class IsNotObserver(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
         return not request.user.is_read_only()
+
+
+class IsAdminRole(permissions.BasePermission):
+    """Faqat admin roli yoki Django superuser."""
+
+    def has_permission(self, request, view):
+        u = request.user
+        if not u or not u.is_authenticated:
+            return False
+        return bool(getattr(u, 'is_superuser', False) or getattr(u, 'role', None) == 'admin')

@@ -7,38 +7,63 @@ from django.utils import timezone
 from openpyxl import Workbook
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsNotObserver
+from accounts.permissions import IsAdminRole, IsNotObserver
 
 from .filters import PublicLandFilter
 from .geo_utils import to_feature, to_feature_collection
-from .models import CityBoundary, LandAttachment, LandCategory, PublicLand
+from .models import CityBoundary, LandAttachment, LandCategory, Mahalla, PublicLand, SystemNotice
 from .serializers import (
     CityBoundarySerializer,
     LandAttachmentSerializer,
     LandCategorySerializer,
+    MahallaSerializer,
     PublicLandSerializer,
+    SystemNoticeSerializer,
 )
 
 
 class LandCategoryViewSet(viewsets.ModelViewSet):
-    queryset = LandCategory.objects.filter(is_active=True)
+    queryset = LandCategory.objects.all()
     serializer_class = LandCategorySerializer
     permission_classes = [IsNotObserver]
     lookup_field = 'code'
     lookup_url_kwarg = 'code'
+    search_fields = ['name_uz', 'name_ru', 'code']
+    filterset_fields = ['geometry_type', 'is_active']
+
+    def get_queryset(self):
+        qs = LandCategory.objects.all().order_by('order', 'name_uz')
+        user = self.request.user
+        is_admin = user and user.is_authenticated and (
+            getattr(user, 'is_superuser', False) or getattr(user, 'role', None) == 'admin'
+        )
+        if self.action == 'list' and not is_admin:
+            qs = qs.filter(is_active=True)
+        return qs
 
 
 class PublicLandViewSet(viewsets.ModelViewSet):
-    queryset = PublicLand.objects.filter(is_active=True).select_related('category', 'created_by')
+    queryset = PublicLand.objects.select_related('category', 'created_by')
     serializer_class = PublicLandSerializer
     permission_classes = [IsNotObserver]
     filterset_class = PublicLandFilter
     search_fields = ['name', 'cadastral_number', 'address', 'description', 'public_id', 'mahalla']
     ordering_fields = ['name', 'area_sqm', 'created_at', 'updated_at', 'status', 'public_id', 'monitoring_year']
+
+    def get_queryset(self):
+        qs = PublicLand.objects.select_related('category', 'created_by')
+        user = self.request.user
+        is_admin = user and user.is_authenticated and (
+            getattr(user, 'is_superuser', False) or getattr(user, 'role', None) == 'admin'
+        )
+        if not is_admin:
+            qs = qs.filter(is_active=True)
+        return qs
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
@@ -94,10 +119,16 @@ class PublicLandViewSet(viewsets.ModelViewSet):
         return Response(ObjectVersionSerializer(qs, many=True).data)
 
 
-class CityBoundaryViewSet(viewsets.ReadOnlyModelViewSet):
+class CityBoundaryViewSet(viewsets.ModelViewSet):
     queryset = CityBoundary.objects.all()
     serializer_class = CityBoundarySerializer
-    permission_classes = [AllowAny]
+    search_fields = ['name', 'code']
+    filterset_fields = ['boundary_type', 'is_visible']
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve', 'geojson'):
+            return [AllowAny()]
+        return [IsNotObserver()]
 
     @action(detail=False, methods=['get'], permission_classes=[AllowAny])
     def geojson(self, request):
@@ -125,6 +156,22 @@ class CityBoundaryViewSet(viewsets.ReadOnlyModelViewSet):
                 },
             })
         return Response({'type': 'FeatureCollection', 'features': features})
+
+
+class MahallaViewSet(viewsets.ModelViewSet):
+    queryset = Mahalla.objects.all()
+    serializer_class = MahallaSerializer
+    permission_classes = [IsNotObserver]
+    search_fields = ['name', 'code']
+    filterset_fields = ['is_active']
+
+
+class SystemNoticeViewSet(viewsets.ModelViewSet):
+    queryset = SystemNotice.objects.all()
+    serializer_class = SystemNoticeSerializer
+    permission_classes = [IsNotObserver]
+    search_fields = ['title', 'message']
+    filterset_fields = ['is_active']
 
 
 class LandAttachmentViewSet(viewsets.ModelViewSet):
@@ -233,4 +280,130 @@ class MapConfigView(APIView):
             'categories': LandCategorySerializer(
                 LandCategory.objects.filter(is_active=True), many=True
             ).data,
+        })
+
+
+class ImportLayerView(APIView):
+    """Admin: shapefile (.zip/.shp) yoki GeoJSON ni xaritaga yuklash."""
+
+    permission_classes = [IsAdminRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        import json
+        import tempfile
+        import zipfile
+        from pathlib import Path
+
+        from .import_utils import find_shp, iter_geojson_features, pick_name, read_shapefile
+
+        target = request.data.get('target', 'layer')  # layer | boundary
+        category_code = request.data.get('category')
+        replace = str(request.data.get('replace', '')).lower() in ('1', 'true', 'yes')
+        prefix = (request.data.get('prefix') or 'Obyekt').strip() or 'Obyekt'
+        uploaded = request.FILES.get('file')
+        geojson_raw = request.data.get('geojson')
+
+        records = []
+        source_name = 'upload'
+
+        if uploaded:
+            source_name = uploaded.name
+            suffix = Path(uploaded.name).suffix.lower()
+            if suffix == '.geojson' or suffix == '.json':
+                try:
+                    data = json.loads(uploaded.read().decode('utf-8'))
+                except Exception:
+                    return Response({'detail': 'GeoJSON o‘qilmadi'}, status=400)
+                records = list(iter_geojson_features(data))
+            elif suffix in ('.zip', '.shp'):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    if suffix == '.zip':
+                        zpath = tmp_path / uploaded.name
+                        zpath.write_bytes(uploaded.read())
+                        with zipfile.ZipFile(zpath) as zf:
+                            zf.extractall(tmp_path)
+                    else:
+                        (tmp_path / uploaded.name).write_bytes(uploaded.read())
+                    shp = find_shp(tmp_path)
+                    if not shp:
+                        return Response(
+                            {'detail': 'ZIP ichida .shp topilmadi. .shp + .shx + .dbf kerak.'},
+                            status=400,
+                        )
+                    records = list(read_shapefile(shp))
+                    source_name = shp.name
+            else:
+                return Response(
+                    {'detail': 'Faqat .zip (shapefile), .shp yoki .geojson qabul qilinadi'},
+                    status=400,
+                )
+        elif geojson_raw:
+            try:
+                data = json.loads(geojson_raw) if isinstance(geojson_raw, str) else geojson_raw
+            except Exception:
+                return Response({'detail': 'GeoJSON noto‘g‘ri'}, status=400)
+            records = list(iter_geojson_features(data))
+        else:
+            return Response({'detail': 'Fayl yoki GeoJSON yuboring'}, status=400)
+
+        if not records:
+            return Response({'detail': 'Faylda geometriya topilmadi'}, status=400)
+
+        if target == 'boundary':
+            props, geom = records[0]
+            code = request.data.get('boundary_code') or 'bukhara_city'
+            name = pick_name(props, 'Chegara', 1)
+            btype = request.data.get('boundary_type') or 'city'
+            obj, _ = CityBoundary.objects.update_or_create(
+                code=code,
+                defaults={
+                    'name': name,
+                    'boundary_type': btype,
+                    'geometry': geom,
+                    'is_visible': True,
+                },
+            )
+            return Response({
+                'imported': 1,
+                'target': 'boundary',
+                'id': obj.id,
+                'name': obj.name,
+                'source': source_name,
+            })
+
+        if not category_code:
+            return Response({'detail': 'Kategoriya tanlang'}, status=400)
+        try:
+            category = LandCategory.objects.get(code=category_code)
+        except LandCategory.DoesNotExist:
+            return Response({'detail': f'Kategoriya topilmadi: {category_code}'}, status=400)
+
+        if replace:
+            PublicLand.objects.filter(category=category).delete()
+
+        created = 0
+        for i, (props, geom) in enumerate(records, start=1):
+            if not geom:
+                continue
+            PublicLand.objects.create(
+                category=category,
+                name=pick_name(props, prefix, i),
+                cadastral_number=str(props.get('osm_id') or props.get('id') or '')[:100],
+                address='Buxoro shahri',
+                description=f'[IMPORT] {source_name}',
+                geometry=geom,
+                status=PublicLand.Status.ACTIVE,
+                is_active=True,
+                created_by=request.user if request.user.is_authenticated else None,
+            )
+            created += 1
+
+        return Response({
+            'imported': created,
+            'target': 'layer',
+            'category': category.code,
+            'replaced': replace,
+            'source': source_name,
         })
