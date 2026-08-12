@@ -30,6 +30,14 @@ from .serializers import (
 
 MONITORING_YEARS = [2018, 2020, 2022, 2024, 2026]
 URBAN_YEARS = [2000, 2005, 2010, 2015, 2020, 2025]
+RESEARCH_CODES = ['yollar', 'suv', 'istirohat', 'park', 'qabriston']
+CATEGORY_NAMES = {
+    'yollar': "Avtomobil yo'llari",
+    'suv': "Sug'orish tarmoqlari",
+    'istirohat': "Istirohat bog'lari",
+    'park': "Istirohat bog'lari",
+    'qabriston': 'Qabristonlar',
+}
 
 
 class DashboardView(APIView):
@@ -164,10 +172,14 @@ class CompareYearsView(APIView):
         year_b = int(request.query_params.get('year_b', 2026))
 
         def snapshot(year):
-            versions = ObjectVersion.objects.filter(year=year).select_related('land')
+            versions = ObjectVersion.objects.filter(
+                year=year,
+                land__category__code__in=RESEARCH_CODES,
+            ).select_related('land', 'land__category')
             if versions.exists():
                 return {
                     v.land_id: {
+                        'id': v.land_id,
                         'public_id': v.land.public_id,
                         'name': v.land.name,
                         'category': v.land.category.code,
@@ -176,11 +188,14 @@ class CompareYearsView(APIView):
                     }
                     for v in versions
                 }
-            # fallback: текущие объекты со шкалой
             scale = {2018: 0.78, 2020: 0.85, 2022: 0.91, 2024: 0.96, 2026: 1.0}.get(year, 1.0)
             out = {}
-            for land in PublicLand.objects.filter(is_active=True).select_related('category'):
+            for land in PublicLand.objects.filter(
+                is_active=True,
+                category__code__in=RESEARCH_CODES,
+            ).select_related('category'):
                 out[land.id] = {
+                    'id': land.id,
                     'public_id': land.public_id,
                     'name': land.name,
                     'category': land.category.code,
@@ -193,24 +208,67 @@ class CompareYearsView(APIView):
         b = snapshot(year_b)
         ids_a, ids_b = set(a), set(b)
 
-        expanded, shrunk, new_objects, disappeared = [], [], [], []
+        expanded, shrunk, new_objects, disappeared, stable = [], [], [], [], []
         for lid in ids_a & ids_b:
             da = b[lid]['area_ha'] - a[lid]['area_ha']
-            item = {**b[lid], 'area_a': a[lid]['area_ha'], 'area_b': b[lid]['area_ha'], 'delta_ha': round(da, 4)}
-            if da > 0.01:
+            dl = b[lid]['length_km'] - a[lid]['length_km']
+            item = {
+                **b[lid],
+                'area_a': a[lid]['area_ha'],
+                'area_b': b[lid]['area_ha'],
+                'delta_ha': round(da, 4),
+                'length_a': a[lid]['length_km'],
+                'length_b': b[lid]['length_km'],
+                'delta_km': round(dl, 3),
+            }
+            if da > 0.01 or dl > 0.01:
                 expanded.append(item)
-            elif da < -0.01:
+            elif da < -0.01 or dl < -0.01:
                 shrunk.append(item)
+            else:
+                stable.append(item)
 
         for lid in ids_b - ids_a:
             new_objects.append(b[lid])
         for lid in ids_a - ids_b:
             disappeared.append(a[lid])
 
+        expanded.sort(key=lambda x: x['delta_ha'], reverse=True)
+        shrunk.sort(key=lambda x: x['delta_ha'])
+
         total_a = sum(x['area_ha'] for x in a.values())
         total_b = sum(x['area_ha'] for x in b.values())
+        len_a = sum(x['length_km'] for x in a.values())
+        len_b = sum(x['length_km'] for x in b.values())
         delta = total_b - total_a
         pct = round((delta / total_a * 100) if total_a else 0, 2)
+
+        by_cat = {}
+        for src, key in ((a, 'a'), (b, 'b')):
+            for row in src.values():
+                code = 'istirohat' if row['category'] == 'park' else row['category']
+                bucket = by_cat.setdefault(code, {
+                    'code': code,
+                    'name': CATEGORY_NAMES.get(code, code),
+                    'area_a': 0, 'area_b': 0,
+                    'length_a': 0, 'length_b': 0,
+                    'count_a': 0, 'count_b': 0,
+                })
+                bucket[f'area_{key}'] += row['area_ha']
+                bucket[f'length_{key}'] += row['length_km']
+                bucket[f'count_{key}'] += 1
+        by_category = []
+        for code in ['yollar', 'suv', 'istirohat', 'qabriston']:
+            row = by_cat.get(code)
+            if not row:
+                continue
+            row['area_a'] = round(row['area_a'], 4)
+            row['area_b'] = round(row['area_b'], 4)
+            row['delta_ha'] = round(row['area_b'] - row['area_a'], 4)
+            row['length_a'] = round(row['length_a'], 3)
+            row['length_b'] = round(row['length_b'], 3)
+            row['delta_km'] = round(row['length_b'] - row['length_a'], 3)
+            by_category.append(row)
 
         return Response({
             'year_a': year_a,
@@ -220,15 +278,20 @@ class CompareYearsView(APIView):
                 'total_area_b_ha': round(total_b, 4),
                 'delta_ha': round(delta, 4),
                 'delta_pct': pct,
+                'total_length_a_km': round(len_a, 3),
+                'total_length_b_km': round(len_b, 3),
+                'delta_km': round(len_b - len_a, 3),
                 'expanded_count': len(expanded),
                 'shrunk_count': len(shrunk),
                 'new_count': len(new_objects),
                 'disappeared_count': len(disappeared),
+                'stable_count': len(stable),
             },
-            'expanded': expanded[:50],
-            'shrunk': shrunk[:50],
-            'new_objects': new_objects[:50],
-            'disappeared': disappeared[:50],
+            'by_category': by_category,
+            'expanded': expanded[:80],
+            'shrunk': shrunk[:80],
+            'new_objects': new_objects[:80],
+            'disappeared': disappeared[:80],
         })
 
 
