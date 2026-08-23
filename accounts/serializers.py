@@ -9,6 +9,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'username', 'email', 'first_name', 'last_name',
             'role', 'organization', 'phone',
+            'job_title', 'sector', 'district', 'region', 'purpose', 'interest_layers', 'comment',
             'is_active', 'is_staff', 'is_superuser', 'date_joined', 'last_login',
         )
         read_only_fields = ('id', 'date_joined', 'last_login')
@@ -22,6 +23,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'username', 'email', 'password', 'first_name', 'last_name',
             'role', 'organization', 'phone',
+            'job_title', 'sector', 'district', 'region', 'purpose', 'interest_layers', 'comment',
             'is_active', 'is_staff', 'is_superuser', 'date_joined', 'last_login',
         )
         read_only_fields = ('id', 'date_joined', 'last_login')
@@ -47,14 +49,26 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=6)
+    password_confirm = serializers.CharField(write_only=True, min_length=6)
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'organization')
+        fields = (
+            'username', 'email', 'password', 'password_confirm',
+            'first_name', 'last_name', 'organization', 'phone',
+            'job_title', 'sector', 'district', 'region', 'purpose', 'interest_layers', 'comment',
+        )
+
+    def validate(self, attrs):
+        if attrs.get('password') != attrs.get('password_confirm'):
+            raise serializers.ValidationError({'password_confirm': 'Parollar mos emas'})
+        return attrs
 
     def create(self, validated_data):
+        validated_data.pop('password_confirm', None)
         password = validated_data.pop('password')
         user = User(**validated_data)
+        user.role = User.Role.OBSERVER
         user.set_password(password)
         user.save()
         return user

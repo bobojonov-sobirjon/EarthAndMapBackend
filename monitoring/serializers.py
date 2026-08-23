@@ -12,9 +12,11 @@ class IssueSerializer(serializers.ModelSerializer):
     class Meta:
         model = Issue
         fields = (
-            'id', 'land', 'land_name', 'land_public_id', 'title', 'description',
+            'id', 'land', 'land_name', 'land_public_id',
+            'title', 'title_ru', 'title_en',
+            'description', 'description_ru', 'description_en',
             'severity', 'status', 'geometry_kind', 'geometry',
-            'latitude', 'longitude',
+            'latitude', 'longitude', 'address',
             'reported_by', 'reported_by_name',
             'assigned_to', 'assigned_to_name',
             'created_at', 'updated_at', 'resolved_at',

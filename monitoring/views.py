@@ -16,10 +16,17 @@ class ChangeLogViewSet(viewsets.ReadOnlyModelViewSet):
 class IssueViewSet(viewsets.ModelViewSet):
     queryset = Issue.objects.select_related('land', 'reported_by', 'assigned_to')
     serializer_class = IssueSerializer
-    permission_classes = [IsNotObserver]
     filterset_fields = ['status', 'severity', 'land']
     search_fields = ['title', 'description']
     ordering_fields = ['created_at', 'severity']
+
+    def get_permissions(self):
+        from rest_framework.permissions import AllowAny, IsAuthenticated
+        if self.action in ('list', 'retrieve'):
+            return [AllowAny()]
+        if self.action == 'create':
+            return [IsAuthenticated()]
+        return [IsNotObserver()]
 
     def perform_create(self, serializer):
         serializer.save(reported_by=self.request.user)

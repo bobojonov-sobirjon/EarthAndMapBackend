@@ -14,6 +14,7 @@ class LandCategory(models.Model):
     code = models.SlugField('Код', max_length=50, unique=True)
     name_uz = models.CharField('Название (UZ)', max_length=200)
     name_ru = models.CharField('Название (RU)', max_length=200, blank=True)
+    name_en = models.CharField('Название (EN)', max_length=200, blank=True)
     geometry_type = models.CharField(
         'Тип геометрии',
         max_length=20,
@@ -22,7 +23,9 @@ class LandCategory(models.Model):
     )
     color = models.CharField('Цвет', max_length=7, default='#3388ff')
     icon = models.CharField('Иконка', max_length=50, blank=True)
-    description = models.TextField('Описание', blank=True)
+    description = models.TextField('Описание (UZ)', blank=True)
+    description_ru = models.TextField('Описание (RU)', blank=True)
+    description_en = models.TextField('Описание (EN)', blank=True)
     is_active = models.BooleanField('Активна', default=True)
     order = models.PositiveIntegerField('Порядок', default=0)
 
@@ -43,7 +46,9 @@ class CityBoundary(models.Model):
         REGION = 'region', 'Область'
 
     code = models.SlugField('Код', max_length=50, unique=True, default='bukhara_city')
-    name = models.CharField('Название', max_length=100, default='Город Бухара')
+    name = models.CharField('Название (UZ)', max_length=100, default='Город Бухара')
+    name_ru = models.CharField('Название (RU)', max_length=100, blank=True)
+    name_en = models.CharField('Название (EN)', max_length=100, blank=True)
     boundary_type = models.CharField(
         'Тип границы',
         max_length=20,
@@ -102,11 +107,17 @@ class PublicLand(models.Model):
         blank=True,
         help_text='Например PARK-001, ROAD-I-001',
     )
-    name = models.CharField('Название', max_length=255)
+    name = models.CharField('Название (UZ)', max_length=255)
+    name_ru = models.CharField('Название (RU)', max_length=255, blank=True)
+    name_en = models.CharField('Название (EN)', max_length=255, blank=True)
     cadastral_number = models.CharField('Кадастровый номер', max_length=100, blank=True)
-    address = models.CharField('Адрес', max_length=500, blank=True)
+    address = models.CharField('Адрес (UZ)', max_length=500, blank=True)
+    address_ru = models.CharField('Адрес (RU)', max_length=500, blank=True)
+    address_en = models.CharField('Адрес (EN)', max_length=500, blank=True)
     mahalla = models.CharField('Махалля', max_length=200, blank=True)
-    description = models.TextField('Описание', blank=True)
+    description = models.TextField('Описание (UZ)', blank=True)
+    description_ru = models.TextField('Описание (RU)', blank=True)
+    description_en = models.TextField('Описание (EN)', blank=True)
     data_source = models.CharField('Источник данных', max_length=200, blank=True, default='GIS / OSM')
 
     geometry = models.JSONField('Геометрия', help_text='Геометрия GeoJSON')
@@ -323,7 +334,9 @@ class MonitoringRecord(models.Model):
         verbose_name='Объект',
     )
     year = models.PositiveIntegerField('Год')
-    description = models.TextField('Описание изменения')
+    description = models.TextField('Описание изменения (UZ)')
+    description_ru = models.TextField('Описание (RU)', blank=True)
+    description_en = models.TextField('Описание (EN)', blank=True)
     delta_area_ha = models.FloatField('Δ площадь (га)', default=0)
     delta_length_km = models.FloatField('Δ длина (км)', default=0)
     status = models.CharField(
@@ -359,7 +372,9 @@ class UrbanizationLayer(models.Model):
         OTHER = 'other', 'Прочее'
 
     year = models.PositiveIntegerField('Год')
-    name = models.CharField('Название', max_length=200)
+    name = models.CharField('Название (UZ)', max_length=200)
+    name_ru = models.CharField('Название (RU)', max_length=200, blank=True)
+    name_en = models.CharField('Название (EN)', max_length=200, blank=True)
     layer_kind = models.CharField(
         'Тип слоя',
         max_length=20,
@@ -371,7 +386,9 @@ class UrbanizationLayer(models.Model):
     growth_pct = models.FloatField('Прирост (%)', default=0)
     color = models.CharField('Цвет', max_length=7, default='#e74c3c')
     is_visible = models.BooleanField('Видим', default=True)
-    note = models.TextField('Примечание', blank=True)
+    note = models.TextField('Примечание (UZ)', blank=True)
+    note_ru = models.TextField('Примечание (RU)', blank=True)
+    note_en = models.TextField('Примечание (EN)', blank=True)
 
     class Meta:
         ordering = ['year', 'layer_kind']
@@ -385,8 +402,12 @@ class UrbanizationLayer(models.Model):
 class SystemNotice(models.Model):
     """Сообщения администратора на главной панели."""
 
-    title = models.CharField('Заголовок', max_length=200)
-    message = models.TextField('Текст')
+    title = models.CharField('Заголовок (UZ)', max_length=200)
+    title_ru = models.CharField('Заголовок (RU)', max_length=200, blank=True)
+    title_en = models.CharField('Заголовок (EN)', max_length=200, blank=True)
+    message = models.TextField('Текст (UZ)')
+    message_ru = models.TextField('Текст (RU)', blank=True)
+    message_en = models.TextField('Текст (EN)', blank=True)
     is_active = models.BooleanField('Активно', default=True)
     created_at = models.DateTimeField('Создано', auto_now_add=True)
     updated_at = models.DateTimeField('Обновлено', auto_now=True)
@@ -403,7 +424,9 @@ class SystemNotice(models.Model):
 class Mahalla(models.Model):
     """Махалли города Бухара."""
 
-    name = models.CharField('Название', max_length=200)
+    name = models.CharField('Название (UZ)', max_length=200)
+    name_ru = models.CharField('Название (RU)', max_length=200, blank=True)
+    name_en = models.CharField('Название (EN)', max_length=200, blank=True)
     code = models.SlugField('Код', max_length=50, unique=True)
     geometry = models.JSONField('Геометрия', null=True, blank=True)
     is_active = models.BooleanField('Активна', default=True)

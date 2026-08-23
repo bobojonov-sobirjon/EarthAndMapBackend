@@ -6,12 +6,12 @@ from .models import User
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ('username', 'email', 'role', 'organization', 'is_staff', 'is_active')
+    list_display = ('username', 'email', 'role', 'organization', 'sector', 'district', 'is_staff', 'is_active')
     list_filter = ('role', 'is_staff', 'is_active')
     search_fields = ('username', 'email', 'organization')
     fieldsets = BaseUserAdmin.fieldsets + (
         ('Роли и организация', {
-            'fields': ('role', 'organization', 'phone'),
+            'fields': ('role', 'organization', 'phone', 'job_title', 'sector', 'region', 'district', 'purpose', 'interest_layers', 'comment'),
             'description': 'Главный администратор · Специалист · Сотрудник мониторинга · Публичный пользователь',
         }),
     )

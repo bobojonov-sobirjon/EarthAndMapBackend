@@ -64,14 +64,16 @@ class DashboardView(APIView):
 
         by_category = []
         for row in (
-            lands.values('category__code', 'category__name_uz', 'category__name_ru', 'category__color')
+            lands.values('category__code', 'category__name_uz', 'category__name_ru', 'category__name_en', 'category__color')
             .annotate(count=Count('id'), total_area=Sum('area_sqm'), total_length=Sum('length_m'))
             .order_by('-count')
         ):
             by_category.append({
                 'code': row['category__code'],
-                'name': row['category__name_ru'] or row['category__name_uz'],
+                'name': row['category__name_uz'],
                 'name_uz': row['category__name_uz'],
+                'name_ru': row['category__name_ru'],
+                'name_en': row['category__name_en'],
                 'color': row['category__color'],
                 'count': row['count'],
                 'area_ha': sqm_to_ha(row['total_area']),
@@ -125,10 +127,14 @@ class DashboardView(APIView):
         return Response({
             'project': {
                 'name': 'Buxoro GIS',
+                'title': 'Buxoro shahri umumiy foydalanishdagi yer obyektlarining elektron reyestri va geoinformatsion monitoring tizimi',
                 'title_uz': 'Buxoro shahri umumiy foydalanishdagi yer obyektlarining elektron reyestri va geoinformatsion monitoring tizimi',
                 'title_ru': 'Электронная реестр и геоинформационная система мониторинга земель общего пользования города Бухары',
+                'title_en': 'Electronic registry and GIS monitoring of public lands in Bukhara city',
+                'description': 'Umumiy foydalanishdagi yerlarni hisobga olish, monitoring qilish va boshqaruv qarorlarini qo‘llab-quvvatlash.',
                 'description_uz': 'Umumiy foydalanishdagi yerlarni hisobga olish, monitoring qilish va boshqaruv qarorlarini qo‘llab-quvvatlash.',
                 'description_ru': 'Учёт, мониторинг и поддержка управленческих решений по землям общего пользования.',
+                'description_en': 'Accounting, monitoring and decision support for public lands.',
                 'city': 'Buxoro',
             },
             'meta': {

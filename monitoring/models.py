@@ -69,8 +69,12 @@ class Issue(models.Model):
         blank=True,
         verbose_name='Объект',
     )
-    title = models.CharField('Заголовок', max_length=255)
-    description = models.TextField('Описание')
+    title = models.CharField('Заголовок (UZ)', max_length=255)
+    title_ru = models.CharField('Заголовок (RU)', max_length=255, blank=True)
+    title_en = models.CharField('Заголовок (EN)', max_length=255, blank=True)
+    description = models.TextField('Описание (UZ)')
+    description_ru = models.TextField('Описание (RU)', blank=True)
+    description_en = models.TextField('Описание (EN)', blank=True)
     severity = models.CharField(
         'Важность',
         max_length=20,
@@ -92,6 +96,7 @@ class Issue(models.Model):
     geometry = models.JSONField('Геометрия (GeoJSON)', null=True, blank=True)
     latitude = models.FloatField('Широта', null=True, blank=True)
     longitude = models.FloatField('Долгота', null=True, blank=True)
+    address = models.CharField('Адрес', max_length=400, blank=True)
     reported_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

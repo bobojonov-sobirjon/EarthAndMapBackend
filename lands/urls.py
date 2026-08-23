@@ -19,6 +19,7 @@ from .views import (
     ImportLayerView,
     MapConfigView,
     PublicLandViewSet,
+    ReverseGeocodeView,
     StatisticsView,
     SystemNoticeViewSet,
 )
@@ -43,5 +44,6 @@ urlpatterns = [
     path('urbanization/', UrbanizationView.as_view(), name='urbanization'),
     path('export/excel/', ExportExcelView.as_view(), name='export-excel'),
     path('map-config/', MapConfigView.as_view(), name='map-config'),
+    path('geocode/reverse/', ReverseGeocodeView.as_view(), name='geocode-reverse'),
     path('import/', ImportLayerView.as_view(), name='import-layer'),
 ]

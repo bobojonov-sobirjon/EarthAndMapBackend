@@ -33,7 +33,7 @@ class LandCategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsNotObserver]
     lookup_field = 'code'
     lookup_url_kwarg = 'code'
-    search_fields = ['name_uz', 'name_ru', 'code']
+    search_fields = ['name_uz', 'name_ru', 'name_en', 'code']
     filterset_fields = ['geometry_type', 'is_active']
 
     def get_queryset(self):
@@ -52,7 +52,7 @@ class PublicLandViewSet(viewsets.ModelViewSet):
     serializer_class = PublicLandSerializer
     permission_classes = [IsNotObserver]
     filterset_class = PublicLandFilter
-    search_fields = ['name', 'cadastral_number', 'address', 'description', 'public_id', 'mahalla']
+    search_fields = ['name', 'name_ru', 'name_en', 'cadastral_number', 'address', 'address_ru', 'address_en', 'description', 'public_id', 'mahalla']
     ordering_fields = ['name', 'area_sqm', 'created_at', 'updated_at', 'status', 'public_id', 'monitoring_year']
 
     def get_queryset(self):
@@ -85,16 +85,18 @@ class PublicLandViewSet(viewsets.ModelViewSet):
         road_class = request.query_params.get('road_class')
         qs = PublicLand.objects.filter(is_active=True).select_related('category')
         if category:
-            qs = qs.filter(category_id=category)
+            raw = str(category).strip()
+            if raw.isdigit():
+                qs = qs.filter(category_id=int(raw))
+            else:
+                qs = qs.filter(category__code=raw)
         if status_filter:
             qs = qs.filter(status=status_filter)
         if road_class:
             qs = qs.filter(road_class=road_class)
         # year — фильтр по актуальной версии года (если есть)
         if year:
-            from .models import ObjectVersion
-            land_ids = ObjectVersion.objects.filter(year=int(year)).values_list('land_id', flat=True)
-            qs = qs.filter(id__in=land_ids)
+            qs = qs.filter(monitoring_year=int(year))
         return Response(to_feature_collection(qs))
 
     @action(detail=True, methods=['get'])
@@ -117,6 +119,24 @@ class PublicLandViewSet(viewsets.ModelViewSet):
         from .serializers import ObjectVersionSerializer
         qs = ObjectVersion.objects.filter(land=land).order_by('year')
         return Response(ObjectVersionSerializer(qs, many=True).data)
+
+    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    def parse_geometry(self, request):
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            return Response({'detail': 'Fayl yuboring'}, status=status.HTTP_400_BAD_REQUEST)
+        from .import_utils import geometry_from_upload
+        try:
+            geom, source_name, count = geometry_from_upload(uploaded)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'geometry': geom,
+            'source': source_name,
+            'features': count,
+        })
 
 
 class CityBoundaryViewSet(viewsets.ModelViewSet):
@@ -275,11 +295,18 @@ class MapConfigView(APIView):
 
     def get(self, request):
         from django.conf import settings
+        years = list(
+            PublicLand.objects.filter(is_active=True)
+            .values_list('monitoring_year', flat=True)
+            .distinct()
+            .order_by('monitoring_year')
+        )
         return Response({
             'center': settings.BUKHARA_CENTER,
             'categories': LandCategorySerializer(
                 LandCategory.objects.filter(is_active=True), many=True
             ).data,
+            'years': [int(y) for y in years if y],
         })
 
 
@@ -295,17 +322,66 @@ class ImportLayerView(APIView):
         import zipfile
         from pathlib import Path
 
-        from .import_utils import find_shp, iter_geojson_features, pick_name, read_shapefile
+        from .bundle_import import import_bundle
+        from .import_utils import (
+            as_line_geometry, dissolve_city_geometry, find_shp,
+            iter_geojson_features, pick_name, read_shapefile,
+        )
+        from .registry_utils import PublicIdSeq
 
         target = request.data.get('target', 'layer')  # layer | boundary
+        mode = (request.data.get('mode') or 'single').strip().lower()
         category_code = request.data.get('category')
         replace = str(request.data.get('replace', '')).lower() in ('1', 'true', 'yes')
-        prefix = (request.data.get('prefix') or 'Obyekt').strip() or 'Obyekt'
+        prefix = (request.data.get('prefix') or 'Объект').strip() or 'Объект'
+        year_raw = request.data.get('year')
+        year = int(year_raw) if str(year_raw or '').isdigit() else None
+        color = (request.data.get('color') or '').strip()
         uploaded = request.FILES.get('file')
         geojson_raw = request.data.get('geojson')
 
         records = []
         source_name = 'upload'
+
+        def extract_zip(data, dest: Path):
+            zpath = dest / 'upload.zip'
+            zpath.write_bytes(data)
+            with zipfile.ZipFile(zpath) as zf:
+                dest_res = dest.resolve()
+                for info in zf.infolist():
+                    out = (dest / info.filename).resolve()
+                    if not str(out).startswith(str(dest_res)):
+                        continue
+                    zf.extract(info, dest)
+
+        if mode == 'bundle':
+            if not uploaded:
+                return Response({'detail': 'Загрузите ZIP со всеми shapefile'}, status=400)
+            suffix = Path(uploaded.name).suffix.lower()
+            if suffix != '.zip':
+                return Response({'detail': 'Пакетный импорт принимает только .zip'}, status=400)
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                tmp_path = Path(tmp)
+                extract_zip(uploaded.read(), tmp_path)
+                packed = import_bundle(
+                    tmp_path,
+                    year_fallback=year or 2026,
+                    replace=replace,
+                    user=request.user,
+                )
+            if not packed:
+                return Response(
+                    {'detail': 'В ZIP не найдено .shp файлов. Нужны группы .shp + .shx + .dbf.'},
+                    status=400,
+                )
+            return Response({
+                'mode': 'bundle',
+                'imported': packed['imported'],
+                'files': packed['files'],
+                'replaced': replace,
+                'layers': packed['layers'],
+                'source': uploaded.name,
+            })
 
         if uploaded:
             source_name = uploaded.name
@@ -314,45 +390,45 @@ class ImportLayerView(APIView):
                 try:
                     data = json.loads(uploaded.read().decode('utf-8'))
                 except Exception:
-                    return Response({'detail': 'GeoJSON o‘qilmadi'}, status=400)
+                    return Response({'detail': 'Не удалось прочитать GeoJSON'}, status=400)
                 records = list(iter_geojson_features(data))
             elif suffix in ('.zip', '.shp'):
-                with tempfile.TemporaryDirectory() as tmp:
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
                     tmp_path = Path(tmp)
                     if suffix == '.zip':
-                        zpath = tmp_path / uploaded.name
-                        zpath.write_bytes(uploaded.read())
-                        with zipfile.ZipFile(zpath) as zf:
-                            zf.extractall(tmp_path)
+                        extract_zip(uploaded.read(), tmp_path)
                     else:
                         (tmp_path / uploaded.name).write_bytes(uploaded.read())
                     shp = find_shp(tmp_path)
                     if not shp:
                         return Response(
-                            {'detail': 'ZIP ichida .shp topilmadi. .shp + .shx + .dbf kerak.'},
+                            {'detail': 'В ZIP нет .shp. Нужны .shp + .shx + .dbf.'},
                             status=400,
                         )
                     records = list(read_shapefile(shp))
                     source_name = shp.name
             else:
                 return Response(
-                    {'detail': 'Faqat .zip (shapefile), .shp yoki .geojson qabul qilinadi'},
+                    {'detail': 'Допустимы .zip (shapefile), .shp или .geojson'},
                     status=400,
                 )
         elif geojson_raw:
             try:
                 data = json.loads(geojson_raw) if isinstance(geojson_raw, str) else geojson_raw
             except Exception:
-                return Response({'detail': 'GeoJSON noto‘g‘ri'}, status=400)
+                return Response({'detail': 'Некорректный GeoJSON'}, status=400)
             records = list(iter_geojson_features(data))
         else:
-            return Response({'detail': 'Fayl yoki GeoJSON yuboring'}, status=400)
+            return Response({'detail': 'Отправьте файл или GeoJSON'}, status=400)
 
         if not records:
-            return Response({'detail': 'Faylda geometriya topilmadi'}, status=400)
+            return Response({'detail': 'В файле нет геометрии'}, status=400)
 
         if target == 'boundary':
-            props, geom = records[0]
+            props, _first = records[0]
+            geom = dissolve_city_geometry([g for _, g in records if g])
+            if not geom:
+                return Response({'detail': 'В файле нет геометрии'}, status=400)
             code = request.data.get('boundary_code') or 'bukhara_city'
             name = pick_name(props, 'Chegara', 1)
             btype = request.data.get('boundary_type') or 'city'
@@ -363,10 +439,11 @@ class ImportLayerView(APIView):
                     'boundary_type': btype,
                     'geometry': geom,
                     'is_visible': True,
+                    'fill_opacity': 0.22,
                 },
             )
             return Response({
-                'imported': 1,
+                'imported': len(records),
                 'target': 'boundary',
                 'id': obj.id,
                 'name': obj.name,
@@ -374,28 +451,40 @@ class ImportLayerView(APIView):
             })
 
         if not category_code:
-            return Response({'detail': 'Kategoriya tanlang'}, status=400)
+            return Response({'detail': 'Выберите категорию'}, status=400)
         try:
             category = LandCategory.objects.get(code=category_code)
         except LandCategory.DoesNotExist:
-            return Response({'detail': f'Kategoriya topilmadi: {category_code}'}, status=400)
+            return Response({'detail': f'Категория не найдена: {category_code}'}, status=400)
+
+        if color and len(color) <= 7:
+            category.color = color
+            category.save(update_fields=['color'])
 
         if replace:
-            PublicLand.objects.filter(category=category).delete()
+            qs = PublicLand.objects.filter(category=category)
+            if year:
+                qs = qs.filter(monitoring_year=year)
+            qs.delete()
 
         created = 0
+        ids = PublicIdSeq(category.code)
         for i, (props, geom) in enumerate(records, start=1):
             if not geom:
                 continue
+            if category.geometry_type == LandCategory.GeometryType.LINE:
+                geom = as_line_geometry(geom)
             PublicLand.objects.create(
                 category=category,
+                public_id=ids.next(),
                 name=pick_name(props, prefix, i),
                 cadastral_number=str(props.get('osm_id') or props.get('id') or '')[:100],
                 address='Buxoro shahri',
-                description=f'[IMPORT] {source_name}',
+                description=f'[IMPORT] {source_name}' + (f' | {year}' if year else ''),
                 geometry=geom,
                 status=PublicLand.Status.ACTIVE,
                 is_active=True,
+                monitoring_year=year or 2026,
                 created_by=request.user if request.user.is_authenticated else None,
             )
             created += 1
@@ -404,6 +493,58 @@ class ImportLayerView(APIView):
             'imported': created,
             'target': 'layer',
             'category': category.code,
+            'year': year,
+            'color': category.color,
             'replaced': replace,
             'source': source_name,
         })
+
+
+class ReverseGeocodeView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        import json
+        import urllib.parse
+        import urllib.request
+
+        try:
+            lat = float(request.query_params.get('lat'))
+            lng = float(request.query_params.get('lng') or request.query_params.get('lon'))
+        except (TypeError, ValueError):
+            return Response({'label': ''}, status=status.HTTP_400_BAD_REQUEST)
+
+        lang = request.query_params.get('lang') or 'uz'
+        loc = 'ru' if lang == 'ru' else 'en' if lang == 'en' else 'uz'
+        qs = urllib.parse.urlencode({
+            'format': 'jsonv2',
+            'lat': f'{lat:.6f}',
+            'lon': f'{lng:.6f}',
+            'accept-language': loc,
+        })
+        url = f'https://nominatim.openstreetmap.org/reverse?{qs}'
+        req = urllib.request.Request(
+            url,
+            headers={
+                'User-Agent': 'BuxoroGIS/1.0 (map reverse geocode)',
+                'Accept': 'application/json',
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+        except Exception:
+            return Response({'label': 'Buxoro, O‘zbekiston'})
+
+        addr = data.get('address') or {}
+        parts = [
+            addr.get('road') or addr.get('pedestrian') or addr.get('residential'),
+            addr.get('neighbourhood') or addr.get('suburb') or addr.get('village'),
+            addr.get('city') or addr.get('town') or addr.get('county') or addr.get('state'),
+        ]
+        seen = []
+        for p in parts:
+            if p and p not in seen:
+                seen.append(p)
+        label = ', '.join(seen) or data.get('display_name') or 'Buxoro, O‘zbekiston'
+        return Response({'label': label})

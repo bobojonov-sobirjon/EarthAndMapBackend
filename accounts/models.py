@@ -17,6 +17,13 @@ class User(AbstractUser):
     )
     organization = models.CharField('Организация', max_length=255, blank=True)
     phone = models.CharField('Телефон', max_length=20, blank=True)
+    job_title = models.CharField('Должность', max_length=120, blank=True)
+    sector = models.CharField('Сектор', max_length=80, blank=True)
+    district = models.CharField('Район / город', max_length=120, blank=True)
+    region = models.CharField('Область', max_length=120, blank=True)
+    purpose = models.CharField('Цель использования', max_length=80, blank=True)
+    interest_layers = models.CharField('Интерес к слоям', max_length=255, blank=True)
+    comment = models.TextField('Комментарий', blank=True)
 
     class Meta:
         verbose_name = 'Пользователь'
