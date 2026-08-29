@@ -87,6 +87,13 @@ class PublicLand(models.Model):
         SHAHAR = 'shahar', 'Городские / районные'
         MAHALLIY = 'mahalliy', 'Местные'
         PIYODA = 'piyoda', 'Пешеходные'
+        # Sug'orish
+        KANAL = 'kanal', 'Каналы'
+        ARIQ = 'ariq', 'Арыки'
+        # Istirohat (SHP fclass)
+        PARK = 'park', 'Парки'
+        XIYOBON = 'xiyobon', 'Бульвары / хиёбон'
+        SQUARE = 'square', 'Площади / майдон'
 
     class Condition(models.TextChoices):
         GOOD = 'good', 'Хорошее'

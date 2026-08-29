@@ -40,133 +40,248 @@ CATEGORY_NAMES = {
 }
 
 
+YEAR_SCALE = {2018: 0.78, 2020: 0.85, 2022: 0.91, 2024: 0.96, 2025: 0.98, 2026: 1.0}
+ROAD_ONLY = {'magistral', 'shahar', 'mahalliy', 'piyoda'}
+
+
+def _scale_for(year):
+    return YEAR_SCALE.get(int(year), 1.0)
+
+
+def _agg_lands(qs, scale=1.0):
+    total_objects = qs.count()
+    total_area = (qs.aggregate(s=Sum('area_sqm'))['s'] or 0) * scale
+    roads = qs.filter(category__code='yollar')
+    water = qs.filter(category__code='suv')
+    parks = qs.filter(category__code__in=['park', 'istirohat'])
+    cemeteries = qs.filter(category__code='qabriston')
+
+    roads_m = (roads.aggregate(s=Sum('length_m'))['s'] or 0) * scale
+    water_m = (water.aggregate(s=Sum('length_m'))['s'] or 0) * scale
+    parks_area = (parks.aggregate(s=Sum('area_sqm'))['s'] or 0) * scale
+    cem_area = (cemeteries.aggregate(s=Sum('area_sqm'))['s'] or 0) * scale
+
+    def sc_count(n):
+        return n if scale >= 0.999 else int(round(n * scale))
+
+    by_category = []
+    for row in (
+        qs.values(
+            'category__code', 'category__name_uz', 'category__name_ru',
+            'category__name_en', 'category__color',
+        )
+        .annotate(count=Count('id'), total_area=Sum('area_sqm'), total_length=Sum('length_m'))
+        .order_by('-count')
+    ):
+        by_category.append({
+            'code': row['category__code'],
+            'name': row['category__name_uz'],
+            'name_uz': row['category__name_uz'],
+            'name_ru': row['category__name_ru'],
+            'name_en': row['category__name_en'],
+            'color': row['category__color'],
+            'count': sc_count(row['count']),
+            'area_ha': sqm_to_ha((row['total_area'] or 0) * scale),
+            'length_km': m_to_km((row['total_length'] or 0) * scale),
+        })
+
+    by_status = [
+        {'code': row['status'] or 'unknown', 'count': sc_count(row['count'])}
+        for row in qs.values('status').annotate(count=Count('id')).order_by('-count')
+    ]
+    by_condition = [
+        {'code': row['condition'] or 'unknown', 'count': sc_count(row['count'])}
+        for row in qs.values('condition').annotate(count=Count('id')).order_by('-count')
+    ]
+
+    road_by_class = []
+    for code, label in PublicLand.RoadClass.choices:
+        if code not in ROAD_ONLY:
+            continue
+        length = roads.filter(road_class=code).aggregate(s=Sum('length_m'))['s'] or 0
+        cnt = roads.filter(road_class=code).count()
+        if length or cnt:
+            road_by_class.append({
+                'code': code,
+                'name': label,
+                'count': sc_count(cnt),
+                'length_km': m_to_km(length * scale),
+            })
+
+    water_by_class = []
+    for code in ('kanal', 'ariq'):
+        length = water.filter(road_class=code).aggregate(s=Sum('length_m'))['s'] or 0
+        cnt = water.filter(road_class=code).count()
+        if length or cnt:
+            water_by_class.append({
+                'code': code,
+                'count': sc_count(cnt),
+                'length_km': m_to_km(length * scale),
+            })
+
+    park_by_class = []
+    for code in ('park', 'xiyobon', 'square'):
+        area = parks.filter(road_class=code).aggregate(s=Sum('area_sqm'))['s'] or 0
+        cnt = parks.filter(road_class=code).count()
+        if area or cnt:
+            park_by_class.append({
+                'code': code,
+                'count': sc_count(cnt),
+                'area_ha': sqm_to_ha(area * scale),
+            })
+
+    by_mahalla = []
+    for row in (
+        qs.exclude(mahalla='')
+        .values('mahalla')
+        .annotate(count=Count('id'), total_area=Sum('area_sqm'), total_length=Sum('length_m'))
+        .order_by('-count')[:20]
+    ):
+        by_mahalla.append({
+            'name': row['mahalla'],
+            'count': sc_count(row['count']),
+            'area_ha': sqm_to_ha((row['total_area'] or 0) * scale),
+            'length_km': m_to_km((row['total_length'] or 0) * scale),
+        })
+
+    return {
+        'kpis': {
+            'total_objects': sc_count(total_objects),
+            'total_area_ha': sqm_to_ha(total_area),
+            'roads_length_km': m_to_km(roads_m),
+            'roads_count': sc_count(roads.count()),
+            'water_length_km': m_to_km(water_m),
+            'water_count': sc_count(water.count()),
+            'parks_count': sc_count(parks.count()),
+            'parks_area_ha': sqm_to_ha(parks_area),
+            'cemeteries_count': sc_count(cemeteries.count()),
+            'cemeteries_area_ha': sqm_to_ha(cem_area),
+            'empty_mahalla_count': sc_count(qs.filter(mahalla='').count()),
+        },
+        'by_category': by_category,
+        'by_status': by_status,
+        'by_condition': by_condition,
+        'road_by_class': road_by_class,
+        'water_by_class': water_by_class,
+        'park_by_class': park_by_class,
+        'by_mahalla': by_mahalla,
+    }
+
+
 class DashboardView(APIView):
-    """Главная панель (визитная карточка системы) — KPI и графики."""
+    """KPI + atributlar statistikasi, yil filtri bilan."""
 
     permission_classes = [AllowAny]
 
     def get(self, request):
-        year = int(request.query_params.get('year', 2026))
-        lands = PublicLand.objects.filter(is_active=True)
-        prev_factor = 0.92  # условная база прошлого среза для % роста
+        year_raw = request.query_params.get('year', '')
+        try:
+            year = int(year_raw) if str(year_raw).strip() else None
+        except (TypeError, ValueError):
+            year = None
 
-        total_objects = lands.count()
-        total_area_sqm = lands.aggregate(s=Sum('area_sqm'))['s'] or 0
-        roads = lands.filter(category__code='yollar')
-        water = lands.filter(category__code='suv')
-        parks = lands.filter(category__code__in=['park', 'istirohat'])
-        cemeteries = lands.filter(category__code='qabriston')
-        squares = lands.filter(category__code='maydon')
-        boulevards = lands.filter(category__code='xiyobon')
+        base = PublicLand.objects.filter(
+            is_active=True,
+            category__code__in=RESEARCH_CODES,
+        ).select_related('category')
 
-        total_roads_m = roads.aggregate(s=Sum('length_m'))['s'] or 0
-        total_water_m = water.aggregate(s=Sum('length_m'))['s'] or 0
+        db_years = list(
+            PublicLand.objects.filter(is_active=True)
+            .values_list('monitoring_year', flat=True)
+            .distinct()
+            .order_by('monitoring_year')
+        )
+        years = sorted(set(MONITORING_YEARS) | {int(y) for y in db_years if y})
+        if not years:
+            years = list(MONITORING_YEARS)
 
-        by_category = []
-        for row in (
-            lands.values('category__code', 'category__name_uz', 'category__name_ru', 'category__name_en', 'category__color')
-            .annotate(count=Count('id'), total_area=Sum('area_sqm'), total_length=Sum('length_m'))
-            .order_by('-count')
-        ):
-            by_category.append({
-                'code': row['category__code'],
-                'name': row['category__name_uz'],
-                'name_uz': row['category__name_uz'],
-                'name_ru': row['category__name_ru'],
-                'name_en': row['category__name_en'],
-                'color': row['category__color'],
-                'count': row['count'],
-                'area_ha': sqm_to_ha(row['total_area']),
-                'length_km': m_to_km(row['total_length']),
-            })
+        if year is None:
+            year = max(db_years) if db_years else max(years)
 
-        # Динамика площади по годам (из версий + текущие)
-        area_dynamics = []
-        for y in MONITORING_YEARS:
-            versions = ObjectVersion.objects.filter(year=y)
+        exact = base.filter(monitoring_year=year)
+        if exact.exists():
+            payload = _agg_lands(exact, scale=1.0)
+            mode = 'exact'
+        else:
+            versions = ObjectVersion.objects.filter(
+                year=year,
+                land__category__code__in=RESEARCH_CODES,
+            )
             if versions.exists():
-                area = versions.aggregate(s=Sum('area_sqm'))['s'] or 0
+                land_ids = versions.values_list('land_id', flat=True)
+                payload = _agg_lands(base.filter(id__in=land_ids), scale=1.0)
+                mode = 'versions'
             else:
-                # синтетика от текущей площади
-                scale = {2018: 0.78, 2020: 0.85, 2022: 0.91, 2024: 0.96, 2026: 1.0}.get(y, 1.0)
-                area = total_area_sqm * scale
-            area_dynamics.append({'year': y, 'area_ha': sqm_to_ha(area)})
+                max_y = max(db_years) if db_years else year
+                current = base.filter(monitoring_year=max_y) if base.filter(monitoring_year=max_y).exists() else base
+                payload = _agg_lands(current, scale=_scale_for(year))
+                mode = 'scaled'
 
-        road_by_class = []
-        for code, label in PublicLand.RoadClass.choices:
-            length = roads.filter(road_class=code).aggregate(s=Sum('length_m'))['s'] or 0
-            if not length and code == 'shahar':
-                length = total_roads_m * 0.35
-            elif not length and code == 'mahalliy':
-                length = total_roads_m * 0.40
-            elif not length and code == 'magistral':
-                length = total_roads_m * 0.15
-            elif not length and code == 'piyoda':
-                length = total_roads_m * 0.10
-            road_by_class.append({
-                'code': code,
-                'name': label,
-                'length_km': m_to_km(length),
+        area_dynamics = []
+        length_dynamics = []
+        max_y = max(db_years) if db_years else 2026
+        current = base.filter(monitoring_year=max_y) if base.filter(monitoring_year=max_y).exists() else base
+        cur_area = current.aggregate(s=Sum('area_sqm'))['s'] or 0
+        cur_road = current.filter(category__code='yollar').aggregate(s=Sum('length_m'))['s'] or 0
+        cur_water = current.filter(category__code='suv').aggregate(s=Sum('length_m'))['s'] or 0
+        for y in years:
+            vers = ObjectVersion.objects.filter(year=y)
+            if vers.exists():
+                a = vers.aggregate(s=Sum('area_sqm'))['s'] or 0
+                rl = vers.filter(land__category__code='yollar').aggregate(s=Sum('length_m'))['s'] or 0
+                wl = vers.filter(land__category__code='suv').aggregate(s=Sum('length_m'))['s'] or 0
+            elif base.filter(monitoring_year=y).exists():
+                qs = base.filter(monitoring_year=y)
+                a = qs.aggregate(s=Sum('area_sqm'))['s'] or 0
+                rl = qs.filter(category__code='yollar').aggregate(s=Sum('length_m'))['s'] or 0
+                wl = qs.filter(category__code='suv').aggregate(s=Sum('length_m'))['s'] or 0
+            else:
+                sc = _scale_for(y)
+                a = cur_area * sc
+                rl = cur_road * sc
+                wl = cur_water * sc
+            area_dynamics.append({'year': y, 'area_ha': sqm_to_ha(a)})
+            length_dynamics.append({
+                'year': y,
+                'roads_km': m_to_km(rl),
+                'water_km': m_to_km(wl),
             })
-
-        recent_changes = ChangeLogSerializer(
-            ChangeLog.objects.select_related('land', 'changed_by')[:8],
-            many=True,
-        ).data
-
-        monitoring_records = MonitoringRecordSerializer(
-            MonitoringRecord.objects.select_related('land')[:8],
-            many=True,
-        ).data
 
         notice = SystemNotice.objects.filter(is_active=True).first()
         current_year = MonitoringYear.objects.filter(
             year_type=MonitoringYear.YearType.MONITORING, is_current=True,
         ).first()
+        recent_changes = ChangeLogSerializer(
+            ChangeLog.objects.select_related('land', 'changed_by')[:8],
+            many=True,
+        ).data
+        monitoring_records = MonitoringRecordSerializer(
+            MonitoringRecord.objects.select_related('land')[:8],
+            many=True,
+        ).data
 
         return Response({
             'project': {
                 'name': 'Buxoro GIS',
-                'title': 'Buxoro shahri umumiy foydalanishdagi yer obyektlarining elektron reyestri va geoinformatsion monitoring tizimi',
-                'title_uz': 'Buxoro shahri umumiy foydalanishdagi yer obyektlarining elektron reyestri va geoinformatsion monitoring tizimi',
-                'title_ru': 'Электронная реестр и геоинформационная система мониторинга земель общего пользования города Бухары',
-                'title_en': 'Electronic registry and GIS monitoring of public lands in Bukhara city',
-                'description': 'Umumiy foydalanishdagi yerlarni hisobga olish, monitoring qilish va boshqaruv qarorlarini qo‘llab-quvvatlash.',
-                'description_uz': 'Umumiy foydalanishdagi yerlarni hisobga olish, monitoring qilish va boshqaruv qarorlarini qo‘llab-quvvatlash.',
-                'description_ru': 'Учёт, мониторинг и поддержка управленческих решений по землям общего пользования.',
-                'description_en': 'Accounting, monitoring and decision support for public lands.',
+                'title': 'Buxoro shahri umumiy foydalanishdagi yer obyektlarining elektron reyestri',
                 'city': 'Buxoro',
             },
             'meta': {
                 'selected_year': year,
-                'current_monitoring_year': current_year.year if current_year else 2026,
+                'data_mode': mode,
+                'current_monitoring_year': current_year.year if current_year else max_y,
                 'last_updated': timezone.now().isoformat(),
-                'monitoring_years': MONITORING_YEARS,
-                'urbanization_years': URBAN_YEARS,
+                'monitoring_years': years,
+                'years': years,
+                'db_years': db_years,
             },
             'notice': SystemNoticeSerializer(notice).data if notice else None,
-            'kpis': {
-                'total_objects': total_objects,
-                'total_objects_growth_pct': round((1 - prev_factor) * 100, 1),
-                'total_area_ha': sqm_to_ha(total_area_sqm),
-                'total_area_growth_pct': 15.1,
-                'roads_length_km': m_to_km(total_roads_m),
-                'roads_growth_pct': 3.8,
-                'water_length_km': m_to_km(total_water_m) or 256.34,
-                'parks_count': parks.count(),
-                'parks_area_ha': sqm_to_ha(parks.aggregate(s=Sum('area_sqm'))['s']),
-                'cemeteries_count': cemeteries.count(),
-                'cemeteries_area_ha': sqm_to_ha(cemeteries.aggregate(s=Sum('area_sqm'))['s']),
-                'squares_count': squares.count(),
-                'boulevards_count': boulevards.count(),
-            },
-            'by_category': by_category,
+            **payload,
             'area_dynamics': area_dynamics,
-            'road_by_class': road_by_class,
+            'length_dynamics': length_dynamics,
             'recent_changes': recent_changes,
             'monitoring_records': monitoring_records,
         })
-
 
 class CompareYearsView(APIView):
     """Сравнение двух годов мониторинга."""

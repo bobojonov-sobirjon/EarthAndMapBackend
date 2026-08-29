@@ -8,6 +8,34 @@ from .import_utils import as_line_geometry, dissolve_city_geometry, pick_name, r
 from .models import CityBoundary, LandCategory, PublicLand
 from .registry_utils import PublicIdSeq
 
+# SHP fclass → road_class (istirohat)
+PARK_FCLASS_MAP = {
+    'park': 'park',
+    'garden': 'park',
+    'bog': 'park',
+    'xiyobon': 'xiyobon',
+    'boulevard': 'xiyobon',
+    'alley': 'xiyobon',
+    'square': 'square',
+    'maydon': 'square',
+    'plaza': 'square',
+}
+
+
+def park_class_from_props(props: dict) -> str:
+    raw = (
+        props.get('fclass')
+        or props.get('FCLASS')
+        or props.get('Fclass')
+        or props.get('type')
+        or props.get('TYPE')
+        or ''
+    )
+    key = str(raw).strip().lower()
+    if not key:
+        return ''
+    return PARK_FCLASS_MAP.get(key, key[:20])
+
 CAT_META = {
     'istirohat': {
         'name_uz': "Istirohat bog'lari",
@@ -66,7 +94,7 @@ def classify_stem(stem: str):
         year = int(ym.group(0))
         s = re.sub(r'_?(19|20)\d{2}$', '', s).rstrip('_')
 
-    if re.search(r'buxoro_shahar|bukhara_city|bukhara_area|shahar_chegar', s):
+    if re.search(r'buxoro_shahar|bukhara_city|shahar_chegar', s) and 'tuman' not in s and 'area' not in s:
         return {
             'kind': 'boundary',
             'year': year,
@@ -89,7 +117,11 @@ def classify_stem(stem: str):
         cat = 'yollar'
     elif re.search(r'qabriston', s):
         cat = 'qabriston'
-    elif re.search(r'kanal|suv|sug.?or|ariq', s):
+    elif re.search(r'ariq', s):
+        cat, road_class = 'suv', 'ariq'
+    elif re.search(r'kanal', s):
+        cat, road_class = 'suv', 'kanal'
+    elif re.search(r'suv|sug.?or', s):
         cat = 'suv'
     elif re.search(r'ist.?rohat|bog.?lar|park|rekreas', s):
         cat = 'istirohat'
@@ -181,24 +213,39 @@ def import_one_shp(shp_path: Path, *, year_fallback, replace, user):
 
     created = 0
     prefix = info.get('prefix') or 'Объект'
-    ids = PublicIdSeq(category.code, info.get('road_class') or '')
+    id_seqs = {}
+
+    def next_public_id(road_class: str) -> str:
+        key = road_class or ''
+        if key not in id_seqs:
+            id_seqs[key] = PublicIdSeq(category.code, key)
+        return id_seqs[key].next()
+
     for i, (props, geom) in enumerate(records, start=1):
         if not geom:
             continue
         if category.geometry_type == LandCategory.GeometryType.LINE:
             geom = as_line_geometry(geom)
+
+        road_class = info.get('road_class') or ''
+        if category.code in ('istirohat', 'park') and not road_class:
+            road_class = park_class_from_props(props)
+
+        fclass_raw = (
+            props.get('fclass') or props.get('FCLASS') or props.get('Fclass') or road_class or ''
+        )
         PublicLand.objects.create(
             category=category,
-            public_id=ids.next(),
+            public_id=next_public_id(road_class),
             name=pick_name(props, prefix, i),
-            cadastral_number=str(props.get('osm_id') or props.get('id') or '')[:100],
+            cadastral_number=str(props.get('osm_id') or props.get('id') or props.get('OBJECTID') or '')[:100],
             address='Buxoro shahri',
-            description=f'[IMPORT] {shp_path.name} | {year}',
+            description=f'[IMPORT] {shp_path.name} | {year} | fclass={fclass_raw}',
             geometry=geom,
             status=PublicLand.Status.ACTIVE,
             is_active=True,
             monitoring_year=year,
-            road_class=info.get('road_class') or '',
+            road_class=road_class or '',
             created_by=user if getattr(user, 'is_authenticated', False) else None,
         )
         created += 1

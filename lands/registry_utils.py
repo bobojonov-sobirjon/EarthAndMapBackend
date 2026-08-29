@@ -24,10 +24,25 @@ ROAD_CLASS_PREFIX = {
     'piyoda': 'ROAD-P',
 }
 
+WATER_CLASS_PREFIX = {
+    'kanal': 'WTR-K',
+    'ariq': 'WTR-A',
+}
+
+PARK_CLASS_PREFIX = {
+    'park': 'PARK',
+    'xiyobon': 'BLV',
+    'square': 'SQR',
+}
+
 
 def public_id_prefix(category_code, road_class=''):
     if category_code == 'yollar' and road_class in ROAD_CLASS_PREFIX:
         return ROAD_CLASS_PREFIX[road_class]
+    if category_code == 'suv' and road_class in WATER_CLASS_PREFIX:
+        return WATER_CLASS_PREFIX[road_class]
+    if category_code in ('istirohat', 'park') and road_class in PARK_CLASS_PREFIX:
+        return PARK_CLASS_PREFIX[road_class]
     return CATEGORY_ID_PREFIX.get(category_code, 'OBJ')
 
 

@@ -1,6 +1,6 @@
 """
-Buxoro shahar va viloyat administrativ chegaralari uchun yordamchi ma'lumot.
-Asosiy shahar chegarasi Shapefile (Bukhara_area) dan import_shapefiles orqali yuklanadi.
+Buxoro shahar va viloyat administrativ chegaralari.
+Shahar chegarasi: OSM relation 13070474 (Buxoro shahri) — import_bukhara_city buyrug'i.
 """
 
 # Buxoro viloyati — soddalashtirilgan administrativ kontur (WGS84)

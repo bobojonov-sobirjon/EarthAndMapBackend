@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from accounts.permissions import IsAdminRole, IsNotObserver
 
 from .filters import PublicLandFilter
-from .geo_utils import to_feature, to_feature_collection
+from .geo_utils import geometry_centroid, to_feature, to_feature_collection
 from .models import CityBoundary, LandAttachment, LandCategory, Mahalla, PublicLand, SystemNotice
 from .serializers import (
     CityBoundarySerializer,
@@ -83,6 +83,7 @@ class PublicLandViewSet(viewsets.ModelViewSet):
         status_filter = request.query_params.get('status')
         year = request.query_params.get('year')
         road_class = request.query_params.get('road_class')
+        mahalla = (request.query_params.get('mahalla') or '').strip()
         qs = PublicLand.objects.filter(is_active=True).select_related('category')
         if category:
             raw = str(category).strip()
@@ -94,9 +95,16 @@ class PublicLandViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status=status_filter)
         if road_class:
             qs = qs.filter(road_class=road_class)
-        # year — фильтр по актуальной версии года (если есть)
-        if year:
-            qs = qs.filter(monitoring_year=int(year))
+        if mahalla:
+            qs = qs.filter(mahalla__iexact=mahalla)
+        # year — monitoring yili bo'yicha filtr (0 yoki bo'sh yuborilmasin)
+        if year not in (None, ''):
+            try:
+                y = int(year)
+                if y > 0:
+                    qs = qs.filter(monitoring_year=y)
+            except (TypeError, ValueError):
+                pass
         return Response(to_feature_collection(qs))
 
     @action(detail=True, methods=['get'])
@@ -181,9 +189,49 @@ class CityBoundaryViewSet(viewsets.ModelViewSet):
 class MahallaViewSet(viewsets.ModelViewSet):
     queryset = Mahalla.objects.all()
     serializer_class = MahallaSerializer
-    permission_classes = [IsNotObserver]
     search_fields = ['name', 'code']
     filterset_fields = ['is_active']
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve', 'geojson'):
+            return [AllowAny()]
+        return [IsNotObserver()]
+
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    def geojson(self, request):
+        """Buxoro shahri MFY chegaralarini GeoJSON sifatida qaytaradi."""
+        qs = Mahalla.objects.filter(is_active=True)
+        code = (request.query_params.get('code') or '').strip()
+        if code:
+            qs = qs.filter(code__iexact=code)
+
+        features = []
+        for m in qs:
+            if not m.geometry:
+                continue
+            centroid = geometry_centroid(m.geometry)
+            props = {
+                'id': m.id,
+                'code': m.code,
+                'name': m.name,
+                'name_ru': m.name_ru,
+                'name_en': m.name_en,
+                'centroid': centroid,
+            }
+            features.append({
+                'type': 'Feature',
+                'id': m.id,
+                'geometry': m.geometry,
+                'properties': {**props, 'kind': 'area'},
+            })
+            if centroid:
+                features.append({
+                    'type': 'Feature',
+                    'id': f'{m.id}-point',
+                    'geometry': {'type': 'Point', 'coordinates': centroid},
+                    'properties': {**props, 'kind': 'point'},
+                })
+        return Response({'type': 'FeatureCollection', 'features': features})
 
 
 class SystemNoticeViewSet(viewsets.ModelViewSet):
@@ -468,23 +516,40 @@ class ImportLayerView(APIView):
             qs.delete()
 
         created = 0
-        ids = PublicIdSeq(category.code)
+        from .bundle_import import park_class_from_props
+        id_seqs = {}
+
+        def next_public_id(road_class: str) -> str:
+            key = road_class or ''
+            if key not in id_seqs:
+                id_seqs[key] = PublicIdSeq(category.code, key)
+            return id_seqs[key].next()
+
         for i, (props, geom) in enumerate(records, start=1):
             if not geom:
                 continue
             if category.geometry_type == LandCategory.GeometryType.LINE:
                 geom = as_line_geometry(geom)
+            road_class = ''
+            if category.code in ('istirohat', 'park'):
+                road_class = park_class_from_props(props)
+            fclass_raw = props.get('fclass') or props.get('FCLASS') or road_class or ''
             PublicLand.objects.create(
                 category=category,
-                public_id=ids.next(),
+                public_id=next_public_id(road_class),
                 name=pick_name(props, prefix, i),
-                cadastral_number=str(props.get('osm_id') or props.get('id') or '')[:100],
+                cadastral_number=str(props.get('osm_id') or props.get('id') or props.get('OBJECTID') or '')[:100],
                 address='Buxoro shahri',
-                description=f'[IMPORT] {source_name}' + (f' | {year}' if year else ''),
+                description=(
+                    f'[IMPORT] {source_name}'
+                    + (f' | {year}' if year else '')
+                    + (f' | fclass={fclass_raw}' if fclass_raw else '')
+                ),
                 geometry=geom,
                 status=PublicLand.Status.ACTIVE,
                 is_active=True,
                 monitoring_year=year or 2026,
+                road_class=road_class or '',
                 created_by=request.user if request.user.is_authenticated else None,
             )
             created += 1

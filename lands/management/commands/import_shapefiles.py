@@ -154,29 +154,14 @@ class Command(BaseCommand):
         return objs
 
     def import_boundary(self, root):
+        """Shahar chegarasi — OSM/import_bukhara_city orqali alohida yuklanadi."""
         path = root / f'{BOUNDARY_SHP}.shp'
-        if not path.exists():
-            self.stdout.write(self.style.WARNING('Bukhara_area.shp topilmadi'))
-            return
-        props, geom = next(read_records(path))
-        name = props.get('name') or 'Buxoro shahri'
-        CityBoundary.objects.update_or_create(
-            code='bukhara_city',
-            defaults={
-                'name': name if name else 'Buxoro shahri',
-                'boundary_type': CityBoundary.BoundaryType.CITY,
-                'geometry': geom,
-                'color': '#ff6b00',
-                'weight': 4,
-                'dash_array': '',
-                'fill_opacity': 0.05,
-                'order': 2,
-                'is_visible': True,
-            },
-        )
-        self.stdout.write(self.style.SUCCESS(
-            f'Shahar chegarasi yuklandi (nuqtalar: {len(geom.get("coordinates", [[]])[0])})'
-        ))
+        if path.exists():
+            self.stdout.write(self.style.WARNING(
+                'Bukhara_area.shp o\'tkazib yuborildi — '
+                'shahar chegarasi uchun: python manage.py import_bukhara_city'
+            ))
+        return
 
     def import_region_boundary(self):
         CityBoundary.objects.update_or_create(

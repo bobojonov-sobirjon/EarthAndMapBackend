@@ -59,6 +59,29 @@ def geometry_metrics(geometry: dict[str, Any]) -> tuple[float | None, float | No
     return None, None
 
 
+def geometry_centroid(geom: dict[str, Any] | None) -> list[float] | None:
+    """GeoJSON geometriya markaz nuqtasi [lng, lat]."""
+    if not geom:
+        return None
+    gtype = geom.get('type')
+    if gtype == 'Point':
+        c = geom.get('coordinates') or []
+        return [float(c[0]), float(c[1])] if len(c) >= 2 else None
+    if gtype == 'Polygon':
+        rings = geom.get('coordinates') or []
+        ring = rings[0] if rings else []
+    elif gtype == 'MultiPolygon':
+        polys = geom.get('coordinates') or []
+        ring = polys[0][0] if polys and polys[0] else []
+    else:
+        return None
+    if len(ring) < 3:
+        return None
+    lng = sum(p[0] for p in ring) / len(ring)
+    lat = sum(p[1] for p in ring) / len(ring)
+    return [float(lng), float(lat)]
+
+
 def to_feature(land) -> dict:
     """PublicLand obyektini GeoJSON Feature ga aylantirish."""
     from .registry_utils import m_to_km, sqm_to_ha
