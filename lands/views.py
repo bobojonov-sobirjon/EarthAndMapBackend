@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncMonth
 from django.http import HttpResponse
 from django.utils import timezone
@@ -151,7 +151,7 @@ class CityBoundaryViewSet(viewsets.ModelViewSet):
     queryset = CityBoundary.objects.all()
     serializer_class = CityBoundarySerializer
     search_fields = ['name', 'code']
-    filterset_fields = ['boundary_type', 'is_visible']
+    filterset_fields = ['boundary_type', 'is_visible', 'monitoring_year']
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve', 'geojson'):
@@ -165,6 +165,16 @@ class CityBoundaryViewSet(viewsets.ModelViewSet):
         boundary_type = request.query_params.get('type')
         if boundary_type:
             qs = qs.filter(boundary_type=boundary_type)
+        year_raw = request.query_params.get('year')
+        if year_raw not in (None, ''):
+            try:
+                year = int(year_raw)
+                if year > 0:
+                    qs = qs.filter(
+                        Q(monitoring_year=year) | Q(boundary_type=CityBoundary.BoundaryType.REGION),
+                    )
+            except (TypeError, ValueError):
+                pass
 
         features = []
         for b in qs:
@@ -175,6 +185,7 @@ class CityBoundaryViewSet(viewsets.ModelViewSet):
                 'properties': {
                     'id': b.id,
                     'code': b.code,
+                    'monitoring_year': b.monitoring_year,
                     'name': b.name,
                     'boundary_type': b.boundary_type,
                     'color': b.color,
@@ -343,18 +354,16 @@ class MapConfigView(APIView):
 
     def get(self, request):
         from django.conf import settings
-        years = list(
-            PublicLand.objects.filter(is_active=True)
-            .values_list('monitoring_year', flat=True)
-            .distinct()
-            .order_by('monitoring_year')
-        )
+
+        from .monitoring_years import collect_monitoring_years
+
+        years = collect_monitoring_years()
         return Response({
             'center': settings.BUKHARA_CENTER,
             'categories': LandCategorySerializer(
                 LandCategory.objects.filter(is_active=True), many=True
             ).data,
-            'years': [int(y) for y in years if y],
+            'years': years,
         })
 
 
@@ -482,6 +491,7 @@ class ImportLayerView(APIView):
             btype = request.data.get('boundary_type') or 'city'
             obj, _ = CityBoundary.objects.update_or_create(
                 code=code,
+                monitoring_year=year or 2026,
                 defaults={
                     'name': name,
                     'boundary_type': btype,

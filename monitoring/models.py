@@ -123,3 +123,103 @@ class Issue(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class ApplicationType(models.Model):
+    """Murojaat qabul qiluvchi tashkilot turi."""
+    name = models.CharField('Nomi', max_length=255, unique=True)
+    description = models.TextField(
+        'Tavsif',
+        blank=True,
+        help_text='Tahlil uchun: qanday muammolar shu tashkilotga tegishli',
+    )
+    is_active = models.BooleanField('Faol', default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Murojaat turi'
+        verbose_name_plural = 'Murojaat turlari'
+
+    def __str__(self):
+        return self.name
+
+
+class ApplicationOnSite(models.Model):
+    """Tashkilotning onlayn murojaat sayti."""
+    application_type = models.ForeignKey(
+        ApplicationType,
+        on_delete=models.CASCADE,
+        related_name='sites',
+        verbose_name='Turi',
+    )
+    site_url = models.URLField('Sayt URL', max_length=500)
+    is_active = models.BooleanField('Faol', default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Murojaat sayti'
+        verbose_name_plural = 'Murojaat saytlari'
+
+    def __str__(self):
+        return f'{self.application_type.name} — {self.site_url}'
+
+
+class ApplicationSubmission(models.Model):
+    """Foydalanuvchi tashkilot saytiga yuborgan murojaati (bizda saqlanadi)."""
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Qoralama'
+        SUBMITTED = 'submitted', 'Yuborilgan'
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='application_submissions',
+        verbose_name='Foydalanuvchi',
+    )
+    application_type = models.ForeignKey(
+        ApplicationType,
+        on_delete=models.PROTECT,
+        related_name='submissions',
+        verbose_name='Turi',
+    )
+    site = models.ForeignKey(
+        ApplicationOnSite,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submissions',
+        verbose_name='Sayt',
+    )
+    analysis_text = models.TextField('Tahlil matni', blank=True)
+    match_score = models.FloatField('Moslik %', default=0)
+    title = models.CharField('Sarlavha', max_length=255, blank=True)
+    description = models.TextField('Tavsif', blank=True)
+    status = models.CharField(
+        'Holat',
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+    external_payload = models.JSONField('Tashqi sayt ma\'lumoti', default=dict, blank=True)
+    issue = models.ForeignKey(
+        'Issue',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='application_submissions',
+        verbose_name='Muammo',
+    )
+    submitted_at = models.DateTimeField('Yuborilgan', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Murojaat yozuvi'
+        verbose_name_plural = 'Murojaat yozuvlari'
+
+    def __str__(self):
+        return f'{self.application_type.name} — {self.user}'

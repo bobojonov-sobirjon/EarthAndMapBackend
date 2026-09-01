@@ -150,3 +150,7 @@ BUKHARA_CENTER = {
     'lng': 64.440,
     'zoom': 13,
 }
+
+# Murojaat saytlarini ichki iframe (Selenium headless Chrome)
+EMBED_USE_SELENIUM = os.getenv('EMBED_USE_SELENIUM', 'true').lower() in ('1', 'true', 'yes')
+EMBED_SELENIUM_WAIT_SEC = int(os.getenv('EMBED_SELENIUM_WAIT_SEC', '8'))

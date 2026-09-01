@@ -9,6 +9,8 @@ class IsNotObserver(permissions.BasePermission):
             return True
         if not request.user or not request.user.is_authenticated:
             return False
+        if getattr(request.user, 'is_superuser', False):
+            return True
         return not request.user.is_read_only()
 
 

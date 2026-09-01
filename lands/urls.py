@@ -8,6 +8,11 @@ from .dashboard_views import (
     MonitoringYearViewSet,
     ObjectVersionViewSet,
     UrbanizationLayerViewSet,
+    UrbanizationRasterSetViewSet,
+    UrbanizationVectorYearViewSet,
+    UrbanizationGeoJsonView,
+    UrbanizationBundleUploadView,
+    UrbanizationBundlePreviewView,
     UrbanizationView,
 )
 from .views import (
@@ -33,6 +38,8 @@ router.register('monitoring-years', MonitoringYearViewSet, basename='monitoring-
 router.register('object-versions', ObjectVersionViewSet, basename='object-version')
 router.register('monitoring-records', MonitoringRecordViewSet, basename='monitoring-record')
 router.register('urbanization-layers', UrbanizationLayerViewSet, basename='urbanization-layer')
+router.register('urbanization-maps', UrbanizationRasterSetViewSet, basename='urbanization-map')
+router.register('urbanization-vectors', UrbanizationVectorYearViewSet, basename='urbanization-vector')
 router.register('mahallas', MahallaViewSet, basename='mahalla')
 router.register('notices', SystemNoticeViewSet, basename='notice')
 
@@ -42,6 +49,9 @@ urlpatterns = [
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('compare/', CompareYearsView.as_view(), name='compare-years'),
     path('urbanization/', UrbanizationView.as_view(), name='urbanization'),
+    path('urbanization/bundle/', UrbanizationBundleUploadView.as_view(), name='urbanization-bundle'),
+    path('urbanization/bundle/preview/', UrbanizationBundlePreviewView.as_view(), name='urbanization-bundle-preview'),
+    path('urbanization/geojson/', UrbanizationGeoJsonView.as_view(), name='urbanization-geojson'),
     path('export/excel/', ExportExcelView.as_view(), name='export-excel'),
     path('map-config/', MapConfigView.as_view(), name='map-config'),
     path('geocode/reverse/', ReverseGeocodeView.as_view(), name='geocode-reverse'),

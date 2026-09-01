@@ -45,7 +45,12 @@ class CityBoundary(models.Model):
         CITY = 'city', 'Город'
         REGION = 'region', 'Область'
 
-    code = models.SlugField('Код', max_length=50, unique=True, default='bukhara_city')
+    code = models.SlugField('Код', max_length=50, default='bukhara_city')
+    monitoring_year = models.PositiveSmallIntegerField(
+        'Monitoring yili',
+        default=2026,
+        db_index=True,
+    )
     name = models.CharField('Название (UZ)', max_length=100, default='Город Бухара')
     name_ru = models.CharField('Название (RU)', max_length=100, blank=True)
     name_en = models.CharField('Название (EN)', max_length=100, blank=True)
@@ -69,6 +74,12 @@ class CityBoundary(models.Model):
         ordering = ['order', 'name']
         verbose_name = 'Административная граница'
         verbose_name_plural = 'Административные границы'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code', 'monitoring_year'],
+                name='lands_cityboundary_code_year_uniq',
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -404,6 +415,64 @@ class UrbanizationLayer(models.Model):
 
     def __str__(self):
         return f'{self.year} — {self.name}'
+
+
+class UrbanizationRasterSet(models.Model):
+    """Yil bo'yicha urbanizatsiya: RGB + klassifikatsiya (GeoTIFF)."""
+
+    year = models.PositiveIntegerField('Yil', unique=True)
+    title = models.CharField('Sarlavha', max_length=255, blank=True)
+    rgb_tif = models.FileField('RGB GeoTIFF', upload_to='urbanization/rgb/')
+    classified_tif = models.FileField('Klassifikatsiya GeoTIFF', upload_to='urbanization/classified/')
+    rgb_preview = models.ImageField('RGB preview', upload_to='urbanization/previews/', blank=True)
+    classified_preview = models.ImageField('Klassifikatsiya preview', upload_to='urbanization/previews/', blank=True)
+    rgb_bounds = models.JSONField('RGB bounds', default=list, blank=True)
+    classified_bounds = models.JSONField('Klassifikatsiya bounds', default=list, blank=True)
+    rgb_label = models.CharField('RGB yorliq', max_length=120, default='Landsat 7 ETM+ RGB')
+    classified_label = models.CharField(
+        'Klassifikatsiya yorliq',
+        max_length=120,
+        default='Urban extraction (ISO Cluster)',
+    )
+    urban_area_ha = models.FloatField('Urban maydon (ga)', null=True, blank=True)
+    non_urban_area_ha = models.FloatField('Non-urban maydon (ga)', null=True, blank=True)
+    note = models.TextField('Izoh', blank=True)
+    is_visible = models.BooleanField('Ko\'rinadi', default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-year']
+        verbose_name = 'Urbanizatsiya xaritasi'
+        verbose_name_plural = 'Urbanizatsiya xaritalari'
+
+    def __str__(self):
+        return f'Urban {self.year}'
+
+
+class UrbanizationVectorYear(models.Model):
+    """Yil bo'yicha urbanizatsiya klassifikatsiyasi (shapefile → GeoJSON)."""
+
+    year = models.PositiveIntegerField('Yil', unique=True)
+    geojson = models.FileField('GeoJSON', upload_to='urbanization/vector/', blank=True)
+    class_field = models.CharField('Klass maydoni', max_length=64, default='class')
+    feature_count = models.PositiveIntegerField('Ob\'ektlar soni', default=0)
+    urban_area_ha = models.FloatField('Urban maydon (ga)', null=True, blank=True)
+    non_urban_area_ha = models.FloatField('Non-urban maydon (ga)', null=True, blank=True)
+    bounds = models.JSONField('Bounds', default=list, blank=True)
+    source_name = models.CharField('Manba fayl', max_length=255, blank=True)
+    note = models.TextField('Izoh', blank=True)
+    is_visible = models.BooleanField('Ko\'rinadi', default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-year']
+        verbose_name = 'Urbanizatsiya vektor qatlami'
+        verbose_name_plural = 'Urbanizatsiya vektor qatlamlari'
+
+    def __str__(self):
+        return f'Urban vector {self.year}'
 
 
 class SystemNotice(models.Model):

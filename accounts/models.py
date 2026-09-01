@@ -30,6 +30,8 @@ class User(AbstractUser):
         verbose_name_plural = 'Пользователи'
 
     def is_read_only(self):
+        if self.is_superuser:
+            return False
         return self.role == self.Role.OBSERVER
 
     def can_edit(self):

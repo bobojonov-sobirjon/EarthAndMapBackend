@@ -166,6 +166,7 @@ class Command(BaseCommand):
     def import_region_boundary(self):
         CityBoundary.objects.update_or_create(
             code='bukhara_region',
+            monitoring_year=2026,
             defaults={
                 'name': 'Buxoro viloyati',
                 'boundary_type': CityBoundary.BoundaryType.REGION,

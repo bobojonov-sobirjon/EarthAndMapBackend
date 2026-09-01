@@ -35,6 +35,12 @@ class Command(BaseCommand):
             action="store_true",
             help="Import oldin OSM dan yangi chegara yuklab olish",
         )
+        parser.add_argument(
+            "--year",
+            type=int,
+            default=2026,
+            help="Monitoring yili (default: 2026)",
+        )
 
     def handle(self, *args, **options):
         path = Path(options["file"])
@@ -62,6 +68,7 @@ class Command(BaseCommand):
 
         obj, created = CityBoundary.objects.update_or_create(
             code="bukhara_city",
+            monitoring_year=options["year"],
             defaults={
                 "name": "Buxoro shahri",
                 "name_ru": "Город Бухара",
@@ -78,5 +85,5 @@ class Command(BaseCommand):
         )
         action = "yaratildi" if created else "yangilandi"
         self.stdout.write(self.style.SUCCESS(
-            f"Buxoro shahri chegarasi {action} ({geom.get('type')}, {path.name})"
+            f"Buxoro shahri chegarasi {action} ({options['year']}, {geom.get('type')}, {path.name})"
         ))

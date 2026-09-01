@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from .models import ChangeLog, Issue
+from .models import (
+    ApplicationOnSite,
+    ApplicationSubmission,
+    ApplicationType,
+    ChangeLog,
+    Issue,
+)
 
 
 @admin.register(ChangeLog)
@@ -28,3 +34,28 @@ class IssueAdmin(admin.ModelAdmin):
         }),
     )
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(ApplicationType)
+class ApplicationTypeAdmin(admin.ModelAdmin):
+    list_display = ('name', 'is_active', 'created_at')
+    list_filter = ('is_active',)
+    search_fields = ('name', 'description')
+    fields = ('name', 'description', 'is_active')
+
+
+@admin.register(ApplicationOnSite)
+class ApplicationOnSiteAdmin(admin.ModelAdmin):
+    list_display = ('application_type', 'site_url', 'is_active', 'created_at')
+    list_filter = ('is_active', 'application_type')
+    search_fields = ('site_url', 'application_type__name')
+
+
+@admin.register(ApplicationSubmission)
+class ApplicationSubmissionAdmin(admin.ModelAdmin):
+    list_display = (
+        'application_type', 'user', 'match_score', 'status', 'submitted_at', 'created_at',
+    )
+    list_filter = ('status', 'application_type')
+    search_fields = ('title', 'description', 'analysis_text', 'user__username')
+    readonly_fields = ('created_at', 'updated_at', 'submitted_at')

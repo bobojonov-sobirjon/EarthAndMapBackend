@@ -186,6 +186,7 @@ def import_one_shp(shp_path: Path, *, year_fallback, replace, user):
             return {'stem': shp_path.stem, 'ok': False, 'error': 'Пустая граница'}
         obj, _ = CityBoundary.objects.update_or_create(
             code=info['code'],
+            monitoring_year=year,
             defaults={
                 'name': pick_name(props, info.get('name') or 'Граница', 1),
                 'name_ru': 'Город Бухара',

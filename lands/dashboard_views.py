@@ -1,11 +1,15 @@
 from django.db.models import Count, Sum
 from django.utils import timezone
+import json
+import tempfile
+from pathlib import Path
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import viewsets
+from rest_framework.parsers import FormParser, MultiPartParser
 
-from accounts.permissions import IsNotObserver
+from accounts.permissions import IsAdminRole, IsNotObserver
 from monitoring.models import ChangeLog, Issue
 from monitoring.serializers import ChangeLogSerializer, IssueSerializer
 
@@ -17,6 +21,8 @@ from .models import (
     PublicLand,
     SystemNotice,
     UrbanizationLayer,
+    UrbanizationRasterSet,
+    UrbanizationVectorYear,
 )
 from .registry_utils import m_to_km, sqm_to_ha
 from .serializers import (
@@ -25,6 +31,10 @@ from .serializers import (
     ObjectVersionSerializer,
     SystemNoticeSerializer,
     UrbanizationLayerSerializer,
+    UrbanizationRasterSetSerializer,
+    UrbanizationRasterSetWriteSerializer,
+    UrbanizationVectorYearSerializer,
+    UrbanizationVectorYearWriteSerializer,
 )
 
 
@@ -185,18 +195,15 @@ class DashboardView(APIView):
             category__code__in=RESEARCH_CODES,
         ).select_related('category')
 
-        db_years = list(
-            PublicLand.objects.filter(is_active=True)
-            .values_list('monitoring_year', flat=True)
-            .distinct()
-            .order_by('monitoring_year')
-        )
-        years = sorted(set(MONITORING_YEARS) | {int(y) for y in db_years if y})
+        from .monitoring_years import collect_monitoring_years, latest_monitoring_year
+
+        db_years = collect_monitoring_years(include_boundaries=False)
+        years = list(db_years)
         if not years:
-            years = list(MONITORING_YEARS)
+            years = []
 
         if year is None:
-            year = max(db_years) if db_years else max(years)
+            year = latest_monitoring_year(years)
 
         exact = base.filter(monitoring_year=year)
         if exact.exists():
@@ -426,6 +433,28 @@ class UrbanizationView(APIView):
             qs = qs.filter(year=int(year))
 
         layers = UrbanizationLayerSerializer(qs, many=True).data
+        maps_qs = UrbanizationRasterSet.objects.filter(is_visible=True).order_by('year')
+        if year:
+            maps_qs = maps_qs.filter(year=int(year))
+        maps = UrbanizationRasterSetSerializer(
+            maps_qs, many=True, context={'request': request},
+        ).data
+        map_years = list(
+            UrbanizationRasterSet.objects.filter(is_visible=True)
+            .values_list('year', flat=True)
+            .order_by('year'),
+        )
+        vectors_qs = UrbanizationVectorYear.objects.filter(is_visible=True).order_by('year')
+        if year:
+            vectors_qs = vectors_qs.filter(year=int(year))
+        vectors = UrbanizationVectorYearSerializer(
+            vectors_qs, many=True, context={'request': request},
+        ).data
+        vector_years = list(
+            UrbanizationVectorYear.objects.filter(is_visible=True)
+            .values_list('year', flat=True)
+            .order_by('year'),
+        )
         by_year = {}
         for layer in qs:
             by_year.setdefault(layer.year, {'year': layer.year, 'urban_ha': 0, 'agriculture_ha': 0, 'other_ha': 0})
@@ -435,6 +464,16 @@ class UrbanizationView(APIView):
                 by_year[layer.year]['agriculture_ha'] += layer.area_ha
             else:
                 by_year[layer.year]['other_ha'] += layer.area_ha
+
+        for vec in vectors_qs:
+            entry = by_year.setdefault(
+                vec.year,
+                {'year': vec.year, 'urban_ha': 0, 'agriculture_ha': 0, 'other_ha': 0},
+            )
+            if vec.urban_area_ha is not None:
+                entry['urban_ha'] = vec.urban_area_ha
+            if vec.non_urban_area_ha is not None:
+                entry['agriculture_ha'] = vec.non_urban_area_ha
 
         # если нет данных — синтетика по ТЗ
         if not by_year:
@@ -449,9 +488,14 @@ class UrbanizationView(APIView):
 
         series = [by_year[y] for y in sorted(by_year)]
         latest = series[-1] if series else {}
+        from .urbanization_vector import URBAN_VECTOR_YEARS
+        years_out = vector_years if vector_years else (map_years if map_years else URBAN_VECTOR_YEARS)
         return Response({
-            'years': URBAN_YEARS,
+            'years': years_out,
             'layers': layers,
+            'maps': maps,
+            'vectors': vectors,
+            'vector_years': vector_years,
             'series': series,
             'summary': {
                 'urban_ha': latest.get('urban_ha', 6645.6),
@@ -548,3 +592,223 @@ class UrbanizationLayerViewSet(viewsets.ModelViewSet):
                 })
             return Response({'type': 'FeatureCollection', 'features': features})
         return response
+
+
+class UrbanizationBundleUploadView(APIView):
+    """Bitta ZIP: ichida GeoTIFF (RGB + klassifikatsiya) va shapefile."""
+    permission_classes = [IsAdminRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        year = request.data.get('year')
+        bundle = request.FILES.get('bundle')
+        shapefile = request.FILES.get('shapefile')
+        classified_tif = request.FILES.get('classified_tif')
+        rgb_tif = request.FILES.get('rgb_tif')
+        if not year:
+            return Response({'detail': 'Yil talab qilinadi'}, status=400)
+        if not bundle and not shapefile and not classified_tif:
+            return Response({'detail': 'Shapefile yoki GeoTIFF yuboring'}, status=400)
+
+        note = request.data.get('note', '')
+
+        def _float(v):
+            if v is None or v == '':
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        from .urbanization_bundle import process_urbanization_bundle, process_urbanization_files
+
+        try:
+            if bundle:
+                result = process_urbanization_bundle(
+                    bundle.read(),
+                    int(year),
+                    note=note,
+                    source_name=bundle.name,
+                )
+            else:
+                result = process_urbanization_files(
+                    int(year),
+                    shapefile_bytes=shapefile.read() if shapefile else None,
+                    shapefile_name=shapefile.name if shapefile else '',
+                    classified_tif_bytes=classified_tif.read() if classified_tif else None,
+                    classified_tif_name=classified_tif.name if classified_tif else '',
+                    rgb_tif_bytes=rgb_tif.read() if rgb_tif else None,
+                    rgb_tif_name=rgb_tif.name if rgb_tif else '',
+                    note=note,
+                )
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=400)
+
+        ctx = {'request': request}
+        data = {
+            'year': int(year),
+            'warnings': result.get('warnings', []),
+            'vector': UrbanizationVectorYearSerializer(result['vector'], context=ctx).data
+            if result.get('vector') else None,
+            'raster': UrbanizationRasterSetSerializer(result['raster'], context=ctx).data
+            if result.get('raster') else None,
+        }
+        return Response(data, status=201)
+
+
+class UrbanizationBundlePreviewView(APIView):
+    """ZIP tahlil — shapefile atributlarini ko'rsatadi, saqlamaydi."""
+    permission_classes = [IsAdminRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        year = request.data.get('year')
+        bundle = request.FILES.get('bundle')
+        shapefile = request.FILES.get('shapefile')
+        classified_tif = request.FILES.get('classified_tif')
+        if not year:
+            return Response({'detail': 'Yil talab qilinadi'}, status=400)
+
+        from .urbanization_bundle import scan_urbanization_bundle, scan_urbanization_files
+
+        try:
+            if bundle:
+                data = scan_urbanization_bundle(bundle.read(), int(year))
+            elif shapefile or classified_tif:
+                data = scan_urbanization_files(
+                    int(year),
+                    shapefile_bytes=shapefile.read() if shapefile else None,
+                    shapefile_name=shapefile.name if shapefile else '',
+                    classified_tif_bytes=classified_tif.read() if classified_tif else None,
+                    classified_tif_name=classified_tif.name if classified_tif else '',
+                )
+            else:
+                return Response({'detail': 'Fayl tanlang'}, status=400)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=400)
+        return Response(data)
+
+
+def _process_raster_files(obj: UrbanizationRasterSet) -> None:
+    from .urbanization_bundle import _apply_raster_previews
+    _apply_raster_previews(obj)
+
+
+class UrbanizationRasterSetViewSet(viewsets.ModelViewSet):
+    queryset = UrbanizationRasterSet.objects.all()
+    parser_classes = [MultiPartParser, FormParser]
+    search_fields = ['title', 'note']
+    filterset_fields = ['year', 'is_visible']
+
+    def get_serializer_class(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return UrbanizationRasterSetWriteSerializer
+        return UrbanizationRasterSetSerializer
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [AllowAny()]
+        return [IsNotObserver()]
+
+    def get_queryset(self):
+        qs = UrbanizationRasterSet.objects.all().order_by('-year')
+        if self.action in ('list', 'retrieve') and not (
+            self.request.user and self.request.user.is_authenticated
+            and (getattr(self.request.user, 'is_superuser', False) or getattr(self.request.user, 'role', None) == 'admin')
+        ):
+            qs = qs.filter(is_visible=True)
+        return qs
+
+    def perform_create(self, serializer):
+        obj = serializer.save()
+        if not obj.title:
+            obj.title = f'{obj.year}-yilda Buxoro shahar hududlari (Landsat + ISO Cluster)'
+            obj.save(update_fields=['title'])
+        _process_raster_files(obj)
+
+    def perform_update(self, serializer):
+        obj = serializer.save()
+        _process_raster_files(obj)
+
+
+class UrbanizationGeoJsonView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        year = request.query_params.get('year')
+        if not year:
+            return Response({'detail': 'year talab qilinadi'}, status=400)
+        obj = UrbanizationVectorYear.objects.filter(
+            year=int(year), is_visible=True,
+        ).first()
+        if not obj or not obj.geojson:
+            return Response({'detail': 'Topilmadi'}, status=404)
+
+        with obj.geojson.open('r') as fh:
+            data = json.load(fh)
+
+        return Response({
+            'type': 'FeatureCollection',
+            'features': data.get('features', []),
+            'class_field': obj.class_field,
+            'year': obj.year,
+            'bounds': obj.bounds,
+            'urban_area_ha': obj.urban_area_ha,
+            'non_urban_area_ha': obj.non_urban_area_ha,
+        })
+
+
+class UrbanizationVectorYearViewSet(viewsets.ModelViewSet):
+    queryset = UrbanizationVectorYear.objects.all()
+    parser_classes = [MultiPartParser, FormParser]
+    search_fields = ['source_name', 'note']
+    filterset_fields = ['year', 'is_visible']
+
+    def get_serializer_class(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return UrbanizationVectorYearWriteSerializer
+        return UrbanizationVectorYearSerializer
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [AllowAny()]
+        return [IsNotObserver()]
+
+    def get_queryset(self):
+        qs = UrbanizationVectorYear.objects.all().order_by('-year')
+        if self.action in ('list', 'retrieve') and not (
+            self.request.user and self.request.user.is_authenticated
+            and (getattr(self.request.user, 'is_superuser', False) or getattr(self.request.user, 'role', None) == 'admin')
+        ):
+            qs = qs.filter(is_visible=True)
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        uploaded = serializer.validated_data.pop('shapefile')
+        year = serializer.validated_data.get('year')
+        suffix = Path(uploaded.name).suffix.lower() or '.zip'
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            for chunk in uploaded.chunks():
+                tmp.write(chunk)
+            tmp_path = Path(tmp.name)
+
+        from .urbanization_vector import import_urbanization_shapefile, save_vector_year
+
+        try:
+            payload = import_urbanization_shapefile(tmp_path, year)
+            obj = save_vector_year(UrbanizationVectorYear, payload)
+            if serializer.validated_data.get('note'):
+                obj.note = serializer.validated_data['note']
+                obj.save(update_fields=['note', 'updated_at'])
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=400)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        out = UrbanizationVectorYearSerializer(obj, context={'request': request})
+        return Response(out.data, status=201)

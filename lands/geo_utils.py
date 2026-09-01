@@ -59,6 +59,36 @@ def geometry_metrics(geometry: dict[str, Any]) -> tuple[float | None, float | No
     return None, None
 
 
+def geodesic_area_sqm(geometry: dict[str, Any] | None) -> float:
+    """WGS84 geodezik maydon (m²) — shapely + pyproj."""
+    if not geometry:
+        return 0.0
+    try:
+        from shapely.geometry import shape
+        from pyproj import Geod
+
+        sh = shape(geometry)
+        if sh.is_empty:
+            return 0.0
+        if not sh.is_valid:
+            sh = sh.buffer(0)
+        geod = Geod(ellps='WGS84')
+        if sh.geom_type == 'Polygon':
+            area, _ = geod.geometry_area_perimeter(sh)
+            return abs(float(area))
+        if sh.geom_type == 'MultiPolygon':
+            total = 0.0
+            for poly in sh.geoms:
+                area, _ = geod.geometry_area_perimeter(poly)
+                total += abs(float(area))
+            return total
+    except Exception:
+        sqm, _ = geometry_metrics(geometry)
+        return float(sqm or 0.0)
+    sqm, _ = geometry_metrics(geometry)
+    return float(sqm or 0.0)
+
+
 def geometry_centroid(geom: dict[str, Any] | None) -> list[float] | None:
     """GeoJSON geometriya markaz nuqtasi [lng, lat]."""
     if not geom:

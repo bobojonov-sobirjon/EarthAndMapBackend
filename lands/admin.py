@@ -12,6 +12,8 @@ from .models import (
     PublicLand,
     SystemNotice,
     UrbanizationLayer,
+    UrbanizationRasterSet,
+    UrbanizationVectorYear,
 )
 
 
@@ -113,6 +115,21 @@ class UrbanizationLayerAdmin(admin.ModelAdmin):
     list_display = ('year', 'name', 'layer_kind', 'area_ha', 'growth_pct', 'is_visible')
     list_filter = ('year', 'layer_kind', 'is_visible')
     list_editable = ('is_visible',)
+
+
+@admin.register(UrbanizationRasterSet)
+class UrbanizationRasterSetAdmin(admin.ModelAdmin):
+    list_display = ('year', 'title', 'urban_area_ha', 'is_visible', 'updated_at')
+    list_filter = ('year', 'is_visible')
+    search_fields = ('title', 'note')
+
+
+@admin.register(UrbanizationVectorYear)
+class UrbanizationVectorYearAdmin(admin.ModelAdmin):
+    list_display = ('year', 'class_field', 'feature_count', 'urban_area_ha', 'is_visible', 'updated_at')
+    list_filter = ('year', 'is_visible')
+    search_fields = ('source_name', 'note')
+    readonly_fields = ('feature_count', 'bounds', 'source_name', 'created_at', 'updated_at')
 
 
 @admin.register(SystemNotice)

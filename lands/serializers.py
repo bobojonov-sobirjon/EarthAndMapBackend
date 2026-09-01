@@ -11,6 +11,8 @@ from .models import (
     PublicLand,
     SystemNotice,
     UrbanizationLayer,
+    UrbanizationRasterSet,
+    UrbanizationVectorYear,
 )
 from .registry_utils import m_to_km, sqm_to_ha
 
@@ -82,7 +84,7 @@ class CityBoundarySerializer(serializers.ModelSerializer):
     class Meta:
         model = CityBoundary
         fields = (
-            'id', 'code', 'name', 'name_ru', 'name_en', 'boundary_type', 'geometry',
+            'id', 'code', 'monitoring_year', 'name', 'name_ru', 'name_en', 'boundary_type', 'geometry',
             'color', 'weight', 'dash_array', 'fill_opacity',
             'is_visible', 'order', 'updated_at',
         )
@@ -138,6 +140,84 @@ class UrbanizationLayerSerializer(serializers.ModelSerializer):
             'id', 'year', 'name', 'name_ru', 'name_en', 'layer_kind', 'geometry',
             'area_ha', 'growth_pct', 'color', 'is_visible', 'note', 'note_ru', 'note_en',
         )
+
+
+class UrbanizationRasterSetSerializer(serializers.ModelSerializer):
+    rgb_preview_url = serializers.SerializerMethodField()
+    classified_preview_url = serializers.SerializerMethodField()
+    rgb_tif_url = serializers.SerializerMethodField()
+    classified_tif_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UrbanizationRasterSet
+        fields = (
+            'id', 'year', 'title', 'rgb_label', 'classified_label',
+            'rgb_bounds', 'classified_bounds',
+            'rgb_preview_url', 'classified_preview_url',
+            'rgb_tif_url', 'classified_tif_url',
+            'urban_area_ha', 'non_urban_area_ha', 'note', 'is_visible',
+            'created_at', 'updated_at',
+        )
+        read_only_fields = (
+            'rgb_bounds', 'classified_bounds',
+            'rgb_preview_url', 'classified_preview_url',
+            'rgb_tif_url', 'classified_tif_url',
+            'created_at', 'updated_at',
+        )
+
+    def _url(self, f):
+        if not f:
+            return None
+        request = self.context.get('request')
+        url = f.url
+        return request.build_absolute_uri(url) if request else url
+
+    def get_rgb_preview_url(self, obj):
+        return self._url(obj.rgb_preview)
+
+    def get_classified_preview_url(self, obj):
+        return self._url(obj.classified_preview)
+
+    def get_rgb_tif_url(self, obj):
+        return self._url(obj.rgb_tif)
+
+    def get_classified_tif_url(self, obj):
+        return self._url(obj.classified_tif)
+
+
+class UrbanizationRasterSetWriteSerializer(serializers.ModelSerializer):
+    rgb_tif = serializers.FileField()
+    classified_tif = serializers.FileField()
+
+    class Meta:
+        model = UrbanizationRasterSet
+        fields = (
+            'id', 'year', 'title', 'rgb_tif', 'classified_tif',
+            'rgb_label', 'classified_label',
+            'urban_area_ha', 'non_urban_area_ha', 'note', 'is_visible',
+        )
+
+
+class UrbanizationVectorYearSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UrbanizationVectorYear
+        fields = (
+            'id', 'year', 'class_field', 'feature_count',
+            'urban_area_ha', 'non_urban_area_ha', 'bounds',
+            'source_name', 'note', 'is_visible', 'created_at', 'updated_at',
+        )
+        read_only_fields = (
+            'class_field', 'feature_count', 'urban_area_ha', 'non_urban_area_ha',
+            'bounds', 'source_name', 'created_at', 'updated_at',
+        )
+
+
+class UrbanizationVectorYearWriteSerializer(serializers.ModelSerializer):
+    shapefile = serializers.FileField(write_only=True)
+
+    class Meta:
+        model = UrbanizationVectorYear
+        fields = ('year', 'shapefile', 'note', 'is_visible')
 
 
 class SystemNoticeSerializer(serializers.ModelSerializer):
