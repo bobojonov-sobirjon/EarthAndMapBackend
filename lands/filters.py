@@ -7,6 +7,7 @@ class PublicLandFilter(django_filters.FilterSet):
     category = django_filters.NumberFilter(field_name='category_id')
     category_code = django_filters.CharFilter(field_name='category__code')
     status = django_filters.CharFilter()
+    monitoring_year = django_filters.NumberFilter(field_name='monitoring_year')
     mahalla = django_filters.CharFilter(field_name='mahalla', lookup_expr='iexact')
     area_min = django_filters.NumberFilter(field_name='area_sqm', lookup_expr='gte')
     area_max = django_filters.NumberFilter(field_name='area_sqm', lookup_expr='lte')
@@ -17,4 +18,4 @@ class PublicLandFilter(django_filters.FilterSet):
 
     class Meta:
         model = PublicLand
-        fields = ['category', 'status', 'is_active']
+        fields = ['category', 'status', 'is_active', 'monitoring_year']
