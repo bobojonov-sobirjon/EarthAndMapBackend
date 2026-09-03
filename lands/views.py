@@ -166,15 +166,49 @@ class CityBoundaryViewSet(viewsets.ModelViewSet):
         if boundary_type:
             qs = qs.filter(boundary_type=boundary_type)
         year_raw = request.query_params.get('year')
+        year = None
         if year_raw not in (None, ''):
             try:
                 year = int(year_raw)
-                if year > 0:
-                    qs = qs.filter(
-                        Q(monitoring_year=year) | Q(boundary_type=CityBoundary.BoundaryType.REGION),
-                    )
             except (TypeError, ValueError):
-                pass
+                year = None
+
+        if year and year > 0:
+            exact = qs.filter(
+                Q(monitoring_year=year) | Q(boundary_type=CityBoundary.BoundaryType.REGION),
+            )
+            if exact.filter(boundary_type=CityBoundary.BoundaryType.CITY).exists():
+                qs = exact
+            else:
+                # Tanlangan yilda shahar chegarasi bo'lmasa — eng yaqin yil
+                city_years = list(
+                    qs.filter(boundary_type=CityBoundary.BoundaryType.CITY)
+                    .values_list('monitoring_year', flat=True)
+                    .distinct()
+                )
+                if city_years:
+                    nearest = min(city_years, key=lambda y: (abs(int(y) - year), -int(y)))
+                    qs = qs.filter(
+                        Q(monitoring_year=nearest) | Q(boundary_type=CityBoundary.BoundaryType.REGION),
+                    )
+                else:
+                    qs = exact
+        else:
+            # Yil berilmasa: har bir code uchun faqat eng so'nggi shahar chegarasi
+            latest_ids = []
+            codes = qs.filter(boundary_type=CityBoundary.BoundaryType.CITY).values_list('code', flat=True).distinct()
+            for code in codes:
+                row = (
+                    qs.filter(code=code, boundary_type=CityBoundary.BoundaryType.CITY)
+                    .order_by('-monitoring_year')
+                    .first()
+                )
+                if row:
+                    latest_ids.append(row.id)
+            region_ids = list(
+                qs.filter(boundary_type=CityBoundary.BoundaryType.REGION).values_list('id', flat=True)
+            )
+            qs = CityBoundary.objects.filter(id__in=latest_ids + region_ids, is_visible=True)
 
         features = []
         for b in qs:
