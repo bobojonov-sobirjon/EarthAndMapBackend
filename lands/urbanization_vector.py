@@ -1,14 +1,47 @@
 """Shapefile → GeoJSON import for urbanization classification layers."""
 import json
+import math
 import re
 import tempfile
 from pathlib import Path
 
 from django.core.files.base import ContentFile
 
-from .geo_utils import geodesic_area_sqm
+from .geo_utils import geometry_metrics
 from .import_utils import extract_zip_safe, find_shp, read_shapefile
 from .registry_utils import sqm_to_ha
+
+
+def _feature_area_sqm(geom) -> float:
+    """Tez maydon (m²) — pyproj Geod o‘rniga shoelace (katta SHP timeout bermasin)."""
+    area, _ = geometry_metrics(geom)
+    return float(area or 0.0)
+
+
+# Buxoro shahri + atrof uchun gektar yuqori chegarasi.
+# Bundan katta qiymat — odatda m² ni «ga» deb yozib qo‘yish xatosi.
+_MAX_PLAUSIBLE_HA = 50_000.0
+
+
+def normalize_ha_value(ha) -> float | None:
+    """
+    Gektarni normalizatsiya qiladi.
+    Agar m² qiymat ga maydoniga yozilgan bo‘lsa (masalan 59 771 700),
+    10 000 ga bo‘lib chiqaradi.
+    """
+    if ha is None:
+        return None
+    try:
+        v = float(ha)
+    except (TypeError, ValueError):
+        return None
+    if v < 0 or not math.isfinite(v):
+        return None
+    # 59 771 700 → 5 977.17
+    while v >= _MAX_PLAUSIBLE_HA:
+        v /= 10_000.0
+    return round(v, 2)
+
 
 CLASS_FIELD_CANDIDATES = [
     'gridcode', 'GRIDCODE', 'GridCode', 'grid_code',
@@ -16,10 +49,12 @@ CLASS_FIELD_CANDIDATES = [
     'urban', 'URBAN', 'class_id', 'classification', 'CLASSIFICATION', 'DN', 'dn',
 ]
 
+# Avvalo aniq m² maydonlari; «ha» nomli maydonlar oxirida (ko‘pincha aslida m² bo‘ladi)
 AREA_FIELD_CANDIDATES = [
+    'SHAPE_AREA', 'Shape_Area', 'shape_area', 'Shape_Area_1',
+    'AREA_M2', 'Area_m2', 'area_m2', 'AREA_SQM', 'area_sqm', 'SQUARE_M', 'SqM', 'sqm',
+    'AREA', 'Area', 'area',
     'AREA_HA', 'Area_Ha', 'area_ha', 'HECTARES', 'Hectares', 'hectares', 'GA', 'ga',
-    'AREA', 'Area', 'area', 'SHAPE_AREA', 'Shape_Area', 'shape_area', 'Shape_Area_1',
-    'AREA_M2', 'Area_m2', 'area_m2', 'SQUARE_M', 'SqM', 'sqm', 'AREA_SQM',
 ]
 
 URBAN_VECTOR_YEARS = [2000, 2010, 2015, 2020, 2025]
@@ -61,18 +96,28 @@ def _parse_area_value(val) -> float | None:
 
 def _area_field_unit(field_name: str, sample_vals: list[float]) -> str:
     """'ha' yoki 'sqm'."""
-    low = field_name.lower()
-    if 'ha' in low or 'hect' in low or low == 'ga':
+    low = field_name.lower().replace(' ', '_')
+    med = sorted(sample_vals)[len(sample_vals) // 2] if sample_vals else None
+
+    # ArcGIS Shape_Area / SHAPE_Area / area_sqm — har doim m²
+    if 'm2' in low or 'sqm' in low or 'square_m' in low or 'shape_area' in low:
+        return 'sqm'
+    if low in ('area', 'shape.area'):
+        return 'sqm'
+
+    name_says_ha = ('ha' in low) or ('hect' in low) or (low == 'ga')
+    if name_says_ha:
+        # Nomi «ha», lekin qiymatlar katta (m²) — m² deb olsin
+        if med is not None and med > 100:
+            return 'sqm'
         return 'ha'
-    if 'm2' in low or 'sqm' in low or 'square_m' in low:
+
+    if med is None:
         return 'sqm'
-    if not sample_vals:
+    # Katta qiymatlar odatda m², juda kichik (<2) — ga
+    if med > 50:
         return 'sqm'
-    med = sorted(sample_vals)[len(sample_vals) // 2]
-    # Katta qiymatlar odatda m² (Shape_Area), kichik — ga
-    if med > 5000:
-        return 'sqm'
-    if med < 500:
+    if med < 2:
         return 'ha'
     return 'sqm'
 
@@ -145,7 +190,7 @@ def compute_class_areas(records: list, class_field: str) -> tuple[float, float, 
         if not geom:
             continue
         cls = _normalize_class(props.get(class_field))
-        sqm = geodesic_area_sqm(geom)
+        sqm = _feature_area_sqm(geom)
         if sqm <= 0:
             continue
         if cls == 1:
@@ -204,7 +249,7 @@ def build_feature_collection(records: list, year: int, class_field: str) -> dict
 
         feat_sqm = _area_sqm_from_props(props, used_area_field, area_unit) if used_area_field else 0.0
         if feat_sqm <= 0:
-            feat_sqm = geodesic_area_sqm(geom)
+            feat_sqm = _feature_area_sqm(geom)
         if feat_sqm > 0:
             clean_props['area_sqm'] = round(feat_sqm, 2)
             clean_props['area_ha'] = round(sqm_to_ha(feat_sqm), 4)
@@ -223,8 +268,8 @@ def build_feature_collection(records: list, year: int, class_field: str) -> dict
             'class_field': class_field,
             'area_field': used_area_field,
             'bounds': _bounds_from_features(features),
-            'urban_area_ha': round(sqm_to_ha(urban_sqm), 2) if urban_sqm > 0 else None,
-            'non_urban_area_ha': round(sqm_to_ha(non_urban_sqm), 2) if non_urban_sqm > 0 else None,
+            'urban_area_ha': normalize_ha_value(sqm_to_ha(urban_sqm)) if urban_sqm > 0 else None,
+            'non_urban_area_ha': normalize_ha_value(sqm_to_ha(non_urban_sqm)) if non_urban_sqm > 0 else None,
             'feature_count': len(features),
         },
     }
@@ -286,10 +331,10 @@ def save_vector_year(model_cls, payload: dict):
         defaults={
             'class_field': payload['class_field'],
             'feature_count': payload['feature_count'],
-            'urban_area_ha': payload['urban_area_ha'],
-            'non_urban_area_ha': payload['non_urban_area_ha'],
-            'bounds': payload['bounds'],
-            'source_name': payload['source_name'],
+            'urban_area_ha': normalize_ha_value(payload['urban_area_ha']),
+            'non_urban_area_ha': normalize_ha_value(payload['non_urban_area_ha']),
+            'bounds': payload.get('bounds'),
+            'source_name': payload.get('source_name') or '',
             'is_visible': True,
         },
     )

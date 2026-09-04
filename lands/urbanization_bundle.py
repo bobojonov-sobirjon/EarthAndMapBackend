@@ -9,6 +9,7 @@ from django.core.files import File
 from .import_utils import extract_zip_safe, find_shp
 from .models import UrbanizationRasterSet, UrbanizationVectorYear
 from .urbanization_raster import landsat_rgb_label, landsat_sensor_name
+from .urbanization_vector import normalize_ha_value, payload_from_shp_path, save_vector_year
 
 RGB_HINTS = ('rgb', 'natural', 'color', 'composite', 'landsat', 'true')
 CLASS_HINTS = ('class', 'cluster', 'iso', 'extraction', 'classification', 'urban', 'cls')
@@ -277,12 +278,12 @@ def _save_raster_year(
     if not classified_path and not rgb_path:
         return None
 
-    urban_ha = urban_area_ha
-    non_urban_ha = non_urban_area_ha
+    urban_ha = normalize_ha_value(urban_area_ha)
+    non_urban_ha = normalize_ha_value(non_urban_area_ha)
     if vector_obj and urban_ha is None:
-        urban_ha = vector_obj.urban_area_ha
+        urban_ha = normalize_ha_value(vector_obj.urban_area_ha)
     if vector_obj and non_urban_ha is None:
-        non_urban_ha = vector_obj.non_urban_area_ha
+        non_urban_ha = normalize_ha_value(vector_obj.non_urban_area_ha)
 
     raster_obj, _ = UrbanizationRasterSet.objects.update_or_create(
         year=year,
@@ -303,7 +304,13 @@ def _save_raster_year(
         with open(classified_path, 'rb') as fh:
             raster_obj.classified_tif.save(f'urban_cls_{year}.tif', File(fh), save=False)
     raster_obj.save()
-    _apply_raster_previews(raster_obj)
+    try:
+        _apply_raster_previews(raster_obj)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            'Urbanization raster preview failed for year=%s: %s', year, exc,
+        )
     return raster_obj
 
 
