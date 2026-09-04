@@ -1,5 +1,6 @@
 """Shapefile / GeoJSON → GeoJSON geometry helpers."""
 import json
+import re
 import tempfile
 import zipfile
 from pathlib import Path
@@ -167,14 +168,19 @@ def shape_to_geojson(shape):
 
 def read_shapefile(shp_path):
     last_err = None
-    for enc in ('utf-8', 'cp1251', 'latin-1'):
+    for enc in ('utf-8', 'cp1251', 'cp866', 'latin-1'):
         reader = None
         try:
             reader = shapefile.Reader(str(shp_path), encoding=enc)
-            fields = [f[0] for f in reader.fields[1:]]
+            fields = [str(f[0]).strip() for f in reader.fields[1:]]
             rows = []
             for sr in reader.iterShapeRecords():
-                props = dict(zip(fields, sr.record))
+                raw = list(sr.record)
+                props = {}
+                for key, val in zip(fields, raw):
+                    if isinstance(val, str):
+                        val = val.strip()
+                    props[key] = val
                 rows.append((props, to_wgs84(shape_to_geojson(sr.shape), Path(shp_path).with_suffix('.prj'))))
             return rows
         except Exception as exc:
@@ -213,11 +219,100 @@ def iter_geojson_features(data):
         yield {}, data
 
 
+def _prop_lookup(props: dict) -> dict:
+    """DBF maydon nomlarini normalizatsiya (bo'sh joy, registr)."""
+    out = {}
+    if not props:
+        return out
+    for key, val in props.items():
+        if key is None:
+            continue
+        k = str(key).strip()
+        if not k:
+            continue
+        out[k] = val
+        out[k.lower()] = val
+        out[k.upper()] = val
+    return out
+
+
+def _clean_name_value(val) -> str:
+    if val is None:
+        return ''
+    if isinstance(val, float) and val == int(val):
+        val = int(val)
+    text = str(val).strip()
+    if not text or text.lower() in ('none', 'null', 'nan', '-', '—'):
+        return ''
+    return text[:255]
+
+
+def _looks_like_id_only(text: str) -> bool:
+    """Faqat raqam / FID / OBJECTID ko'rinishi — obyekt nomi emas."""
+    t = text.strip()
+    if not t:
+        return True
+    if t.isdigit():
+        return True
+    if re.fullmatch(r'[A-Za-z]{0,6}[-_]?\d{1,8}', t):
+        return True
+    return False
+
+
+# Nom uchun kandidat maydonlar (birinchi topilgan — ustuvor)
+_NAME_FIELD_KEYS = (
+    'name', 'NAME', 'Name', 'name_uz', 'NAME_UZ', 'Name_UZ',
+    'nomi', 'NOMI', 'Nomi', 'nom', 'NOM',
+    'title', 'TITLE', 'Title',
+    'label', 'LABEL', 'Label',
+    'nazvanie', 'NAZVANIE', 'nazvaniye',
+    'название', 'НАЗВАНИЕ', 'Название',
+    'qabriston', 'QABRISTON', 'cemetery', 'CEMETERY',
+    'park_name', 'road_name', 'obj_name', 'object_name',
+    'full_name', 'fullname_name',
+)
+
+
 def pick_name(props, prefix, index):
-    for key in ('name', 'NAME', 'Name', 'nomi', 'title', 'TITLE'):
-        val = props.get(key)
-        if val and str(val).strip():
-            return str(val).strip()[:255]
+    """
+    Shapefile atributidan obyekt nomini oladi.
+    Avvalo 'name' / 'nomi' / 'название' kabi matn maydonlari;
+    faqat raqam bo'lsa — boshqa matnli maydon qidiriladi.
+    """
+    lookup = _prop_lookup(props)
+    numeric_fallback = ''
+
+    for key in _NAME_FIELD_KEYS:
+        if key not in lookup:
+            continue
+        text = _clean_name_value(lookup.get(key))
+        if not text:
+            continue
+        if _looks_like_id_only(text):
+            if not numeric_fallback:
+                numeric_fallback = text
+            continue
+        return text
+
+    # Aniq nom maydoni yo'q — boshqa matn atributlaridan (id emas)
+    skip = {
+        'id', 'fid', 'objectid', 'object_id', 'oid', 'gid', 'osm_id', 'osm_way_id',
+        'shape_leng', 'shape_area', 'shape_le_1', 'area', 'area_ha', 'length',
+        'len', 'perimeter', 'fclass', 'type', 'code', 'category', 'year',
+        'monitoring', 'gridcode', 'dn', 'value', 'class',
+    }
+    for key, val in (props or {}).items():
+        low = str(key or '').strip().lower()
+        if not low or low in skip or low.startswith('shape'):
+            continue
+        if any(x in low for x in ('id', 'fid', 'code', 'area', 'len', 'peri')):
+            continue
+        text = _clean_name_value(val)
+        if text and not _looks_like_id_only(text):
+            return text
+
+    if numeric_fallback:
+        return numeric_fallback
     return f'{prefix} #{index}'
 
 
