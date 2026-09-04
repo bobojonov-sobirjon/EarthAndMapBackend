@@ -133,6 +133,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:3000',
     'http://31.129.108.240',
     'http://31.129.108.240:3000',
+    'https://31.129.108.240',
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = (
@@ -143,7 +144,10 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://31.129.108.240',
+    'https://31.129.108.240',
 ]
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 
 BUKHARA_CENTER = {
     'lat': 39.773,
