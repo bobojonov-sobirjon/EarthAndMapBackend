@@ -25,7 +25,7 @@ ALLOWED_HOSTS = [
     h.strip()
     for h in os.getenv(
         'ALLOWED_HOSTS',
-        '127.0.0.1,localhost,31.129.108.240',
+        '127.0.0.1,localhost,31.129.108.240,62.217.176.28',
     ).split(',')
     if h.strip()
 ]
@@ -100,6 +100,10 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Urbanizatsiya SHP+GeoTIFF ZIP yuklash (katta fayllar)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 512 * 1024 * 1024  # 512 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 64 * 1024 * 1024   # 64 MB (diskga spill)
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -134,6 +138,9 @@ CORS_ALLOWED_ORIGINS = [
     'http://31.129.108.240',
     'http://31.129.108.240:3000',
     'https://31.129.108.240',
+    'http://62.217.176.28',
+    'http://62.217.176.28:3000',
+    'https://62.217.176.28',
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = (
@@ -145,6 +152,8 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:5173',
     'http://31.129.108.240',
     'https://31.129.108.240',
+    'http://62.217.176.28',
+    'https://62.217.176.28',
 ]
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
